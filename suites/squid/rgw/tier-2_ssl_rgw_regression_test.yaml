@@ -4,6 +4,7 @@
 # the test suite is to evaluate the STS functionality of RGW.
 
 # Requires a 5 node cluster layout having only one node with RGW role.
+# global-conf: conf/squid/rgw/tier-0_rgw.yaml
 
 tests:
   - test:
@@ -248,6 +249,17 @@ tests:
         run-on-rgw: true
         script-name: test_dynamic_bucket_resharding.py
         config-file-name: test_dbr_with_custom_objs_per_shard_max_dynamic_shard_and_reshard_thread_interval.yaml
+
+  - test:
+      name: DBR tests with higher than default shard limit
+      desc: Resharding test - dynamic
+      polarion-id: CEPH-83573601
+      module: sanity_rgw.py
+      config:
+        run-on-rgw: true
+        script-name: test_dynamic_bucket_resharding.py
+        config-file-name: test_dbr_high_default_limit.yaml
+        timeout: 6000
 
   - test:
       name: Bucket setlifeycle with invalid date in LC conf
