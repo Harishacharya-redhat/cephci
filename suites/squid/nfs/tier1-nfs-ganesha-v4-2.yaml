@@ -289,6 +289,6 @@ tests:
       config:
         cephfs_volume: cephfs
         subvolume_group: nfsgroup
-        nfs_version: 4.1
+        nfs_version: 4.2
         earmark: smb
         operation: wrong_earmark

@@ -249,11 +249,12 @@ tests:
   - test:
       abort-on-fail: false
       config:
-        role: "client"
         commands:
-          - "radosgw-admin account create --account-id RGW11111111111111111 --account-name Account1 --email account1@ceph.com"
           - "radosgw-admin account create --account-id RGW22222222222222222 --account-name Account2 --email account2@ceph.com"
-
+          - "radosgw-admin account create --account-id RGW11111111111111111 --account-name Account1  --email account1@ceph.com"
+          - "radosgw-admin zone modify --enable-feature notification_v2"
+          - "radosgw-admin zonegroup modify --enable-feature notification_v2"
+          - "ceph orch restart rgw.rgw.1"
       desc: Create 2 rgw accounts
       module: exec.py
       name: Create 2 rgw accounts
@@ -302,3 +303,12 @@ tests:
       config:
         script-name: test_Mbuckets_with_Nobjects.py
         config-file-name: test_bi_put_with_incomplete_multipart_upload.yaml
+
+  - test:
+      name: Test anonymous PUT to bucket with public-read-write ACL
+      desc: Test anonymous PUT to bucket with public-read-write ACL
+      polarion-id: CEPH-83604473
+      module: sanity_rgw.py
+      config:
+        script-name: ../aws/test_acl.py
+        config-file-name: ../../aws/configs/test_public_read_write_acl.yaml
