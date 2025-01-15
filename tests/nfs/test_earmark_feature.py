@@ -1,7 +1,8 @@
 from time import sleep
 
 from cli.ceph.ceph import Ceph
-from tests.cephfs.cephfs_utilsV1 import FsUtils
+from cli.ceph.fs.sub_volume import SubVolume
+from cli.ceph.fs.sub_volume_group import SubVolumeGroup
 from tests.nfs.nfs_operations import check_nfs_daemons_removed
 from tests.nfs.nfs_test_multiple_filesystem_exports import create_nfs_export
 from utility.log import Log
@@ -14,7 +15,6 @@ def run(ceph_cluster, **kw):
     Args:
         **kw: Key/value pairs of configuration information to be used in the test.
     """
-    fs_util = FsUtils(ceph_cluster)
     config = kw.get("config")
     nfs_nodes = ceph_cluster.get_nodes("nfs")
     clients = ceph_cluster.get_nodes("client")
@@ -27,32 +27,24 @@ def run(ceph_cluster, **kw):
     subvolume_group = "ganeshagroup"
     subvolume_name = "subvolume"
     earmark = config.get("earmark")
+    subvolume_cli = SubVolume(clients[0], "ceph fs")
 
-    fs_util.create_subvolumegroup(
-        client=clients[0], vol_name=fs_name, group_name=subvolume_group
+    SubVolumeGroup(clients[0], "ceph fs").create(volume=fs_name, group=subvolume_group)
+
+    subvolume_cli.create(
+        volume=fs_name, subvolume=subvolume_name, group_name=subvolume_group
     )
-    fs_util.create_subvolume(
-        client=clients[0],
-        vol_name=fs_name,
-        subvol_name=subvolume_name,
-        validate=True,
-        group_name=subvolume_group,
-    )
-    fs_util.set_subvolume_earmark(
-        client=clients[0],
-        vol_name=fs_name,
-        subvol_name=subvolume_name,
-        group_name=subvolume_group,
+
+    subvolume_cli.set_subvolume_earmark(
+        volume=fs_name,
+        subvolume=subvolume_name,
         earmark=earmark,
-    )
-
-    subvolume_earmark = fs_util.get_subvolume_earmark(
-        client=clients[0],
-        vol_name=fs_name,
-        subvol_name=subvolume_name,
         group_name=subvolume_group,
     )
 
+    subvolume_earmark = subvolume_cli.get_subvolume_earmark(
+        volume=fs_name, subvolume=subvolume_name, group_name=subvolume_group
+    )
     if operation == "verify_earmark":
         if earmark not in subvolume_earmark:
             log.error(f'earmark "{earmark}" not found on subvolume {subvolume_name}')
@@ -64,21 +56,15 @@ def run(ceph_cluster, **kw):
 
     if operation == "rename_earmark":
         earmark2 = "nfs"
-        fs_util.remove_subvolume_earmark(
-            client=clients[0],
-            vol_name=fs_name,
-            subvol_name=subvolume_name,
-            group_name=subvolume_group,
+        subvolume_cli.remove_subvolume_earmark(
+            volume=fs_name, subvolume=subvolume_name, group_name=subvolume_group
         )
-
-        fs_util.set_subvolume_earmark(
-            client=clients[0],
-            vol_name=fs_name,
-            subvol_name=subvolume_name,
+        subvolume_cli.set_subvolume_earmark(
+            volume=fs_name,
+            subvolume=subvolume_name,
             group_name=subvolume_group,
             earmark=earmark2,
         )
-
     try:
         # Setup nfs cluster
         Ceph(clients[0]).nfs.cluster.create(
@@ -88,68 +74,55 @@ def run(ceph_cluster, **kw):
 
         if operation == "override_earmark":
             earmark2 = "smb"
-            fs_util.set_subvolume_earmark(
-                client=clients[0],
-                vol_name=fs_name,
-                subvol_name=subvolume_name,
+            subvolume_cli.set_subvolume_earmark(
+                volume=fs_name,
+                subvolume=subvolume_name,
                 group_name=subvolume_group,
                 earmark=earmark2,
             )
 
         # re-verifying the earmark
-        subvolume_earmark = fs_util.get_subvolume_earmark(
-            client=clients[0],
-            vol_name=fs_name,
-            subvol_name=subvolume_name,
-            group_name=subvolume_group,
+        subvolume_earmark = subvolume_cli.get_subvolume_earmark(
+            volume=fs_name, subvolume=subvolume_name, group_name=subvolume_group
         )
 
         log.info(f"subvolume earmark is {subvolume_earmark}")
 
-        sub_volume_path = fs_util.get_subvolume_info(
-            client=clients[0],
-            vol_name=fs_name,
-            subvol_name=subvolume_name,
-            group_name=subvolume_group,
-        ).get("path")
+        sub_volume_path = subvolume_cli.getpath(
+            volume=fs_name, subvolume=subvolume_name, group_name=subvolume_group
+        )
 
-        try:
-            create_nfs_export(
-                clients[0], fs_name, nfs_name, nfs_export, sub_volume_path, ""
-            )
-            log.info(
-                f"nfs export {nfs_export} has been created for subvolume path {nfs_export}"
-            )
+        create_nfs_export(
+            clients[0], fs_name, nfs_name, nfs_export, sub_volume_path, ""
+        )
+        log.info(
+            f"nfs export {nfs_export} has been created for subvolume path {nfs_export}"
+        )
 
-            Ceph(clients[0]).nfs.export.delete(nfs_name, nfs_export)
-            log.info(
-                f"nfs export {nfs_export} has been deleted for subvolume path {nfs_export}"
-            )
-            return 0
-
-        except Exception as e:
-            # The export should fail earmark has already been set by smb
-            if "earmark has already been set by smb" in e.args[0] and operation in [
-                "override_earmark",
-                "wrong_earmark",
-            ]:
-                log.info(f"expected failure, earmark has already been set by smb {e}")
-                return 0
-            else:
-                log.error(f"Unexpected {e}")
+        Ceph(clients[0]).nfs.export.delete(nfs_name, nfs_export)
+        log.info(
+            f"nfs export {nfs_export} has been deleted for subvolume path {nfs_export}"
+        )
+        return 0
 
     except Exception as e:
+        if "earmark has already been set by smb" in e.args[0] and operation in [
+            "override_earmark",
+            "wrong_earmark",
+        ]:
+            log.info(f"expected failure, earmark has already been set by smb {e}")
+            return 0
+        else:
+            log.error(f"Unexpected {e}")
+
         log.error(f"unable to create nfs cluster {nfs_name} with error {e}")
         return 1
     finally:
         log.info("Cleaning up in progress")
-        fs_util.remove_subvolume(
-            client=clients[0],
-            vol_name=fs_name,
-            subvol_name=subvolume_name,
-            validate=True,
-            group_name=subvolume_group,
+        subvolume_cli.rm(
+            volume=fs_name, subvolume=subvolume_name, group=subvolume_group
         )
+
         log.info(f"Removed the subvolume {subvolume_name} from group {subvolume_group}")
         Ceph(clients[0]).nfs.cluster.delete(nfs_name)
         sleep(30)

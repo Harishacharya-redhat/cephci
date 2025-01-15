@@ -83,3 +83,43 @@ class SubVolume(Cli):
         if isinstance(out, tuple):
             return out[0].strip()
         return out
+
+    def set_subvolume_earmark(self, volume, subvolume, earmark, **kwargs):
+        """
+        Sets an earmark to the subvolume
+        Args:
+            volume (str): Name of vol where subvol is present
+            subvolume (str): subvol name
+            earmark (str): earmark name
+        """
+        cmd = f"{self.base_cmd} earmark set {volume} {subvolume} --earmark {earmark} {build_cmd_from_args(**kwargs)}"
+        out = self.execute(sudo=True, cmd=cmd)
+        if isinstance(out, tuple):
+            return out[0].strip()
+        return out
+
+    def get_subvolume_earmark(self, volume, subvolume, **kwargs):
+        """
+        Gets earmark from subvolume, if earmark is already present
+        Args:
+            volume (str): Name of vol where subvol is present
+            subvolume (str): subvol name
+        """
+        cmd = f"{self.base_cmd} earmark get {volume} {subvolume} {build_cmd_from_args(**kwargs)}"
+        out = self.execute(sudo=True, cmd=cmd)
+        if isinstance(out, tuple):
+            return out[0].strip()
+        return out
+
+    def remove_subvolume_earmark(self, volume, subvolume, **kwargs):
+        """
+        Remove the earmark from subvolume
+        Args:
+            volume (str): Name of vol where subvol is present
+            subvolume (str): subvol name
+        """
+        cmd = f"{self.base_cmd} earmark rm {volume} {subvolume} {build_cmd_from_args(**kwargs)}"
+        out = self.execute(sudo=True, cmd=cmd)
+        if isinstance(out, tuple):
+            return out[0].strip()
+        return out
