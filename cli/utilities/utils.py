@@ -654,21 +654,28 @@ def create_files(client, mount_point, file_count, windows_client=False):
         mount_point (str): mount path
         file_count (int): total file count
     """
-    for i in range(1, file_count + 1):
-        try:
-            if windows_client:
-                cmd = f"type nul > {mount_point}\\win_file{i}"
-                client.exec_command(
-                    cmd=cmd,
-                )
-            else:
-                cmd = f"dd if=/dev/urandom of={mount_point}/file{i} bs=1 count=1"
-                client.exec_command(
-                    sudo=True,
-                    cmd=cmd,
-                )
-        except Exception:
-            raise OperationFailedError(f"failed to create file file{i}")
+
+    for i in range(0, file_count + 1):
+        log.info(f"Creating file{i}")
+        for attempt in range(3):
+            try:
+                if windows_client:
+                    cmd = f"type nul > {mount_point}\\win_file{i}"
+                    client.exec_command(
+                        cmd=cmd,
+                    )
+                else:
+                    cmd = f"dd if=/dev/urandom of={mount_point}/file{i} bs=1 count=1"
+                    client.exec_command(
+                        sudo=True,
+                        cmd=cmd,
+                    )
+                log.info(f"Created file{i}")
+                break
+            except Exception:
+                if attempt == 2:
+                    raise OperationFailedError(f"failed to create file file{i}")
+            log.info(f"Attempting to create file again, Attempt: {attempt}")
 
 
 def perform_lookups(client, mount_point, num_files, windows_client=False):
