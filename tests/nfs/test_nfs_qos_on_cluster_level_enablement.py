@@ -1,10 +1,11 @@
-import json
+import json,re
 from time import sleep
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError, OperationFailedError
+from cli.utilities.filesys import Mount
 from utility.log import Log
-
+# from test_nfs_qos_on_export_level_enablement import capture_copy_details
 log = Log(__name__)
 
 
@@ -46,9 +47,8 @@ def enable_disable_qos_for_cluster(
 
     try:
         if enable_flag:
-            ceph_cluster_nfs_obj.qos.enable(
-                cluster_id=cluster_name, qos_type=qos_type, **qos_parameters
-            )
+            ceph_cluster_nfs_obj.qos.enable(cluster_id=cluster_name,
+                                            qos_type=qos_type, nfs_name=str, export=str, **qos_parameters)
         else:
             ceph_cluster_nfs_obj.qos.disable(cluster_id=cluster_name)
 
@@ -73,13 +73,22 @@ def run(ceph_cluster, **kw):
     nfs_nodes = ceph_cluster.get_nodes("nfs")
     cluster_name = config["cluster_name"]
     operation = config.get("operation", None)
+    port = config.get("port", "2049")
+    version = config.get("nfs_version", "4.2")  # Select only the required number of clients
+    fs_name = "cephfs"
+    nfs_name = "cephfs-nfs"
+    nfs_export = "/export"
+    nfs_mount = "/mnt/nfs"
+    fs = "cephfs"
 
     if not nfs_nodes:
         raise OperationFailedError("No NFS nodes found in cluster")
 
     nfs_node = nfs_nodes[0]
     qos_type = config.get("qos_type", [])
-    ceph_nfs_client = Ceph(clients[0]).nfs
+    client = clients[0]
+    ceph_nfs_client = Ceph(client).nfs
+
 
     try:
         # Create NFS cluster
@@ -143,7 +152,36 @@ def run(ceph_cluster, **kw):
                         f"Qos data for {qos} did not persists after the nfs cluster restarted"
                     )
 
+                    # create nfs export
+                    ceph_nfs_client.export.create(
+                        fs_name=fs_name, nfs_name=nfs_name, nfs_export=nfs_export, fs=fs
+                    )
+
+                    export_data = ceph_nfs_client.export.get(nfs_name=nfs_name, nfs_export=nfs_export)
+                    if not export_data:
+                        raise OperationFailedError("Failed to create nfs export")
+                    # mount the nfs export
+                    client.create_dirs(dir_path=nfs_mount, sudo=True)
+                    if Mount(client).nfs(
+                            mount=nfs_mount,
+                            version=version,
+                            port=port,
+                            server=nfs_node.hostname,
+                            export=nfs_export,
+                    ):
+                        raise OperationFailedError(f"Failed to mount nfs on {client.hostname}")
+
+                    speed = capture_copy_details(client, nfs_mount, "sample.txt")
+
+                    if (float(re.findall(r"\d+", config["max_export_write_bw"])[0]) >
+                            float(re.findall(r"\d+\.\d+", speed)[0])):
+                        log.info(f"Test passed: QoS {qos} enabled successfully in cluster level")
+                    else:
+                        raise OperationFailedError(f"Test failed: QoS {qos} enabled successfully in cluster level"
+                                                   f" transfer speed is {speed} and max_export_write_bw is "
+                                                   f"{config['max_export_write_bw']}")
             # Disable QoS
+
             enable_disable_qos_for_cluster(
                 enable_flag=False,
                 ceph_cluster_nfs_obj=ceph_nfs_client.cluster,
