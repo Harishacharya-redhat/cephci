@@ -145,14 +145,7 @@ def run(ceph_cluster, **kw):
             ):
                 raise OperationFailedError(f"Failed to mount nfs on {client.hostname}")
 
-            speed = capture_copy_details(client, nfs_mount, "sample.txt")
-
-            if (float(re.findall(r"\d+", cluster_bw["max_export_write_bw"])[0]) >
-                    float(re.findall(r"\d+\.\d+", speed)[0])):
-
-                log.info(f"Test passed: QoS {qos} enabled successfully in cluster level"
-                         f" transfer speed is {speed} and max_export_write_bw is {cluster_bw['max_export_write_bw']}")
-
+            # enable qos for export
             enable_disable_qos_for_export(enable_flag=True,
                                           ceph_export_nfs_obj=ceph_nfs_client.export,
                                           cluster_name=cluster_name,
