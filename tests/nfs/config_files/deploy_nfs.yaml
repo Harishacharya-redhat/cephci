@@ -1,0 +1,10 @@
+# This file is part of the NFS deployment configuration.
+
+service_type: nfs
+service_id: nfs1
+placement:
+  host_pattern: '*'
+spec:
+  port: 2049
+  monitoring_port: 678
+---
