@@ -281,6 +281,7 @@ def run(ceph_cluster, **kw):
     file_count = int(config.get("file_count", "100"))
     dd_command_size_in_M = config.get("dd_command_size_in_M", "100")
     export_num = config.get("exports_number", 1)
+    nfs_cluster_name = config.get("nfs_cluster_name", None)
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -290,7 +291,8 @@ def run(ceph_cluster, **kw):
     client = clients[0]  # Select only the required number of clients
 
     # 1. pick the existing NFS cluster
-    nfs_cluster_name = Ceph(client).nfs.cluster.ls()[0]
+    if nfs_cluster_name is None:
+        nfs_cluster_name = Ceph(client).nfs.cluster.ls()[0]
     nfs_hostname = Ceph(client).nfs.cluster.info(nfs_cluster_name)[nfs_cluster_name][
         "backend"
     ][0]["hostname"]

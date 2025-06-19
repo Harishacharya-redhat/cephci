@@ -88,6 +88,9 @@ def create_nfs_cluster(
     nfs_export,
     fs,
     ceph_cluster=None,
+    ha=False,
+    vip=None,
+    active_standby=False,
 ):
     """Create NFS cluster"""
     try:
@@ -104,6 +107,9 @@ def create_nfs_cluster(
             nfs_export,
             fs,
             ceph_cluster=ceph_cluster,
+            ha=ha,
+            vip=vip,
+            active_standby=active_standby,
         )
     except Exception as e:
         raise ConfigError(f"Failed to create NFS cluster: {e}")
@@ -123,6 +129,10 @@ def run(ceph_cluster, **kw):
     no_clients = int(config.get("clients", "2"))
     file_count = int(config.get("file_count", "100"))
     dd_command_size_in_M = config.get("dd_command_size_in_M", "100")
+    nfs_name = config.get("cluster_name", "cephfs-nfs")
+    ha = bool(config.get("ha", False))
+    vip = config.get("vip", None)
+    active_standby = bool(config.get("active_standby", False))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -131,13 +141,14 @@ def run(ceph_cluster, **kw):
     clients = clients[:no_clients]  # Select only the required number of clients
     nfs_node = nfs_nodes[0]
     fs_name = "cephfs"
-    nfs_name = "cephfs-nfs"
     nfs_export = "/export"
     nfs_mount = "/mnt/nfs"
     fs = "cephfs"
     old_file_name = "old_file"
     new_file_name = "new_file"
     nfs_server_name = nfs_node.hostname
+    if ha:
+        nfs_server_name = [nfs_node.hostname for nfs_node in nfs_nodes[0:2]]
 
     try:
         if operation == "before_upgrade":
@@ -153,6 +164,9 @@ def run(ceph_cluster, **kw):
                 nfs_export,
                 fs,
                 ceph_cluster=ceph_cluster,
+                ha=ha,
+                vip=vip,
+                active_standby=active_standby,
             )
             # Create file in parellel using ThreadPoolExecutor
             log.info("Creating files in parallel using ThreadPoolExecutor")
