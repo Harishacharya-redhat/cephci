@@ -26,6 +26,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from jinja_markdown import MarkdownExtension
 from reportportal_client import ReportPortalService
 
+from cli.exceptions import OperationFailedError
 from utility.log import Log
 
 log = Log(__name__)
@@ -51,7 +52,6 @@ output = []
 magna_server = "http://magna002.ceph.redhat.com"
 magna_url = f"{magna_server}/cephci-jenkins/"
 magna_rhcs_artifacts = f"{magna_server}/cephci-jenkins/latest-rhceph-container-info/"
-KAFKA_HOME = "/usr/local/kafka"
 
 
 class TestSetupFailure(Exception):
@@ -1494,19 +1494,6 @@ def fetch_build_artifacts(
         registry, image_name = container_image.split(":")[0].split("/", 1)
         image_tag = container_image.split(":")[-1]
         base_url = build_info["composes"][platform]
-
-        # Todo: Extend the support for RH builds if RH staging repos
-        # are no longer maintained in future
-        if ibm_build:
-            _release = str(ceph_version)[0]
-            ibm_cdn_repo = (
-                f"https://public.dhe.ibm.com/ibmdl/export/pub/"
-                f"storage/ceph/ibm-storage-ceph-{_release}-{platform}.repo"
-            )
-            repo_data = requests.get(base_url)
-            if repo_data.status_code != 200:
-                base_url = ibm_cdn_repo
-
         return base_url, registry, image_name, image_tag
     except Exception as e:
         raise TestSetupFailure(f"Could not fetch build details of : {e}")
@@ -1703,12 +1690,6 @@ def tfacon(launch_id):
 
 def install_start_kafka(rgw_node, cloud_type):
     """Install kafka package and start zookeeper and kafka services."""
-    install_kafka(rgw_node, cloud_type)
-    start_kafka(rgw_node)
-
-
-def install_kafka(rgw_node, cloud_type):
-    """Install kafka package"""
     log.info("install kafka broker for bucket notification tests")
     if cloud_type == "ibmc":
         wget_cmd = "curl -o /tmp/kafka.tgz https://10.245.4.89/kafka_2.13-2.8.0.tgz"
@@ -1722,33 +1703,17 @@ def install_kafka(rgw_node, cloud_type):
         cmd=f"ls /usr/local/kafka/ || ({wget_cmd} && {tar_cmd} && {rename_cmd} && {chown_cmd})",
         sudo=True,
     )
+
+    KAFKA_HOME = "/usr/local/kafka"
+
     # replace localhost ip with rgw ip for kafka listener in server.properties
-    rgw_node_ip = rgw_node.ip_address
-    listener_string_old = "listeners=PLAINTEXT://localhost:9092"
-    listener_string_new = f"listeners=PLAINTEXT://{rgw_node_ip}:9092"
     rgw_node.exec_command(
         sudo=True,
-        cmd=f"grep -q '{listener_string_new}' {KAFKA_HOME}/config/server.properties"
-        + f" || sed -i 's|#{listener_string_old}|{listener_string_new}|' {KAFKA_HOME}/config/server.properties",
+        cmd=f"grep -q 'listeners=PLAINTEXT://{rgw_node.ip_address}:9092' {KAFKA_HOME}/config/server.properties"
+        + f" || sed -i 's|#listeners=PLAINTEXT://:9092|listeners=PLAINTEXT://{rgw_node.ip_address}:9092|' "
+        + f"{KAFKA_HOME}/config/server.properties",
     )
-    # make kafka ports publicly available
-    firewalld_add_public_ports_for_kafka(rgw_node)
 
-
-def start_kafka(rgw_node):
-    """start zookeeper and kafka services."""
-    # start zookeeper service
-    start_zookeeper_service(rgw_node)
-    # wait for zookeeper service to start
-    time.sleep(30)
-    # start kafka service
-    start_kafka_broker(rgw_node)
-    # wait for kafka service to start
-    time.sleep(30)
-
-
-def start_zookeeper_service(rgw_node):
-    """start zookeeper service"""
     # start zookeeper service
     rgw_node.exec_command(
         check_ec=False,
@@ -1756,49 +1721,25 @@ def start_zookeeper_service(rgw_node):
         cmd=f"{KAFKA_HOME}/bin/zookeeper-server-start.sh -daemon {KAFKA_HOME}/config/zookeeper.properties",
     )
 
+    # wait for zookeepeer service to start
+    time.sleep(30)
 
-def start_kafka_broker(rgw_node):
-    """start kafka services"""
+    # start kafka servicee
     rgw_node.exec_command(
         check_ec=False,
         sudo=True,
         cmd=f"{KAFKA_HOME}/bin/kafka-server-start.sh -daemon {KAFKA_HOME}/config/server.properties",
     )
 
+    # wait for kafka service to start
+    time.sleep(30)
+
 
 def configure_kafka_security(rgw_node, cloud_type):
     """Configure kafka security and restart zookeeper and kafka services."""
-    setup_server_properties_security_configs(rgw_node, cloud_type)
-    setup_keystore_certs(rgw_node, cloud_type)
-    stop_kafka(rgw_node)
-    start_kafka(rgw_node)
-    add_kafka_config_for_user(rgw_node)
+    KAFKA_HOME = "/usr/local/kafka"
 
-    # copy kafka ssl certificate to all rgw nodes to be used for authentication while pushing notification
-    rgw_node.exec_command(sudo=True, cmd="sudo yum install -y sshpass")
-    rgw_hosts_out, _ = rgw_node.exec_command(
-        sudo=True, cmd="ceph orch host ls --label rgw --format json"
-    )
-    log.info(rgw_hosts_out)
-    rgw_hosts_out_json = json.loads(rgw_hosts_out)
-    for rgw_host in rgw_hosts_out_json:
-        ip = rgw_host["addr"]
-        rgw_node.exec_command(
-            sudo=True,
-            cmd=f"sshpass -p 'passwd' ssh -o StrictHostKeyChecking=no root@{ip} 'mkdir -p /usr/local/kafka/'",
-        )
-        rgw_node.exec_command(
-            sudo=True,
-            cmd="sshpass -p 'passwd'"
-            + f" scp -o StrictHostKeyChecking=no /usr/local/kafka/y-ca.crt root@{ip}:/usr/local/kafka",
-        )
-
-    # redeploy rgw service so that kafka certs are mounted to rgw container to be used for authentication
-    redeploy_rgw_service_for_kafka_security(rgw_node)
-
-
-def setup_server_properties_security_configs(rgw_node, cloud_type):
-    """append security types configuration into server.properties"""
+    # append security types configuration into server.properties
     if cloud_type == "ibmc":
         curl_server_properties = "curl -o /tmp/kafka_server.properties https://10.245.4.89/kafka_server.properties"
     else:
@@ -1815,25 +1756,7 @@ def setup_server_properties_security_configs(rgw_node, cloud_type):
         cmd=f"yes | cp /tmp/kafka_server.properties {KAFKA_HOME}/config/server.properties",
     )
 
-    # replace localhost ip with rgw ip for kafka listener in server.properties
-    rgw_node_ip = rgw_node.ip_address
-    listener_string_old = (
-        "listeners=PLAINTEXT://localhost:9092,SSL://localhost:9093,"
-        + "SASL_SSL://localhost:9094,SASL_PLAINTEXT://localhost:9095"
-    )
-    listener_string_new = (
-        f"listeners=PLAINTEXT://{rgw_node_ip}:9092,SSL://{rgw_node_ip}:9093,"
-        + f"SASL_SSL://{rgw_node_ip}:9094,SASL_PLAINTEXT://{rgw_node_ip}:9095"
-    )
-    rgw_node.exec_command(
-        sudo=True,
-        cmd=f"grep -q '{listener_string_new}' {KAFKA_HOME}/config/server.properties"
-        + f" || sed -i 's|{listener_string_old}|{listener_string_new}|' {KAFKA_HOME}/config/server.properties",
-    )
-
-
-def setup_keystore_certs(rgw_node, cloud_type):
-    """download kafka_security.sh script, create certs and store them in keystore and truststore"""
+    # download kafka_security.sh script, create certs and store them in keystore and truststore
     if cloud_type == "ibmc":
         curl_security_sh = (
             "curl -o /tmp/kafka-security.sh https://10.245.4.89/kafka-security.sh"
@@ -1855,28 +1778,60 @@ def setup_keystore_certs(rgw_node, cloud_type):
     if status != 0:
         raise Exception("kafka-security.sh script failed")
 
-
-def stop_kafka(rgw_node):
-    """stop zookeeper and kafka services."""
+    # stop kafka service
     rgw_node.exec_command(
         check_ec=False,
         sudo=True,
         cmd=f"{KAFKA_HOME}/bin/kafka-server-stop.sh",
     )
+
     # wait for kafka service to stop
     time.sleep(30)
+
     # stop zookeeper service
     rgw_node.exec_command(
         check_ec=False,
         sudo=True,
         cmd=f"{KAFKA_HOME}/bin/zookeeper-server-stop.sh",
     )
+
     # wait for zookeepeer service to stop
     time.sleep(30)
 
+    # replace localhost ip with rgw ip for kafka listener in server.properties
+    rgw_node.exec_command(
+        sudo=True,
+        cmd=f"grep -q 'listeners=PLAINTEXT://{rgw_node.ip_address}:9092,SSL://{rgw_node.ip_address}:9093,"
+        + f"SASL_SSL://{rgw_node.ip_address}:9094,SASL_PLAINTEXT://{rgw_node.ip_address}:9095'"
+        + f" {KAFKA_HOME}/config/server.properties"
+        + " || sed -i 's|listeners=PLAINTEXT://localhost:9092,SSL://localhost:9093,SASL_SSL://localhost:9094,"
+        + "SASL_PLAINTEXT://localhost:9095|"
+        + f"listeners=PLAINTEXT://{rgw_node.ip_address}:9092,SSL://{rgw_node.ip_address}:9093,"
+        + f"SASL_SSL://{rgw_node.ip_address}:9094,SASL_PLAINTEXT://{rgw_node.ip_address}:9095|'"
+        + f" {KAFKA_HOME}/config/server.properties",
+    )
 
-def add_kafka_config_for_user(rgw_node):
-    """add config for user alice"""
+    # start zookeeper service
+    rgw_node.exec_command(
+        check_ec=False,
+        sudo=True,
+        cmd=f"{KAFKA_HOME}/bin/zookeeper-server-start.sh -daemon {KAFKA_HOME}/config/zookeeper.properties",
+    )
+
+    # wait for zookeepeer service to start
+    time.sleep(30)
+
+    # start kafka service
+    rgw_node.exec_command(
+        check_ec=False,
+        sudo=True,
+        cmd=f"{KAFKA_HOME}/bin/kafka-server-start.sh -daemon {KAFKA_HOME}/config/server.properties",
+    )
+
+    # wait for kafka service to start
+    time.sleep(30)
+
+    # add config for user alice
     rgw_node.exec_command(
         sudo=True,
         cmd=f"{KAFKA_HOME}/bin/kafka-configs.sh --zookeeper localhost:2181 --alter --add-config"
@@ -1884,14 +1839,30 @@ def add_kafka_config_for_user(rgw_node):
         + " --entity-type users --entity-name alice",
     )
 
-
-def redeploy_rgw_service_for_kafka_security(rgw_node):
-    """redeploy rgw service with extra container args to mount kafka cert path to rgw container. also set rgw config"""
     # set rgw_allow_notification_secrets_in_cleartext to true
     rgw_node.exec_command(
         sudo=True,
         cmd="ceph config set client.rgw rgw_allow_notification_secrets_in_cleartext true",
     )
+
+    # copy kafka ssl certificate to all rgw nodes to be used for authentication while pushing notification
+    rgw_node.exec_command(sudo=True, cmd="sudo yum install -y sshpass")
+    rgw_hosts_out, _ = rgw_node.exec_command(
+        sudo=True, cmd="ceph orch host ls --label rgw --format json"
+    )
+    log.info(rgw_hosts_out)
+    rgw_hosts_out_json = json.loads(rgw_hosts_out)
+    for rgw_host in rgw_hosts_out_json:
+        ip = rgw_host["addr"]
+        rgw_node.exec_command(
+            sudo=True,
+            cmd=f"sshpass -p 'passwd' ssh -o StrictHostKeyChecking=no root@{ip} 'mkdir -p /usr/local/kafka/'",
+        )
+        rgw_node.exec_command(
+            sudo=True,
+            cmd="sshpass -p 'passwd'"
+            + f"scp -o StrictHostKeyChecking=no /usr/local/kafka/y-ca.crt root@{ip}:/usr/local/kafka",
+        )
 
     # redeploy rgw service to mount kafka certificate path to rgw container
     rgw_node.exec_command(
@@ -1909,163 +1880,6 @@ def redeploy_rgw_service_for_kafka_security(rgw_node):
     rgw_node.exec_command(sudo=True, cmd="ceph orch apply -i /root/rgw_spec.yaml")
     log.info("sleeping for 20 seconds")
     time.sleep(20)
-
-
-def firewalld_add_public_ports_for_kafka(node):
-    """firewalld add public ports for 2181,2888,3888,9092,9093,9094,9095 which are required for kafka"""
-    log.info(
-        "adding firewalld public ports for 2181,2888,3888,9092,9093,9094,9095 which are required for kafka"
-    )
-    ports = ["2181", "2888", "3888", "9092", "9093", "9094", "9095"]
-    for port in ports:
-        out = node.exec_command(
-            sudo=True,
-            cmd=f"sudo firewall-cmd --zone=public --add-port={port}/tcp --permanent",
-        )
-        log.info(f"add port response: {out}")
-        if out is False:
-            raise Exception(f"firewalld add port failed for port {port}")
-    node.exec_command(
-        sudo=True,
-        cmd="sudo firewall-cmd --reload",
-    )
-    node.exec_command(
-        sudo=True,
-        cmd="sudo systemctl restart firewalld.service",
-    )
-    node.exec_command(
-        sudo=True,
-        cmd="sudo systemctl status firewalld.service",
-    )
-    node.exec_command(
-        sudo=True,
-        cmd="firewall-cmd --zone=public --list-ports",
-    )
-
-
-def configure_kafka_cluster_with_security(ceph_cluster, cloud_type):
-    """setup kafka cluster with zookeeper and kafka running on all rgw nodes. configure kafka broker security as well"""
-    log.info("deploying kafka cluster")
-    rgw_nodes = ceph_cluster.get_ceph_objects("rgw")
-
-    # install kafka on all rgw nodes.
-    zookeeper_properties_str = (
-        "tickTime=2000\ninitLimit=10\nsyncLimit=5\ndataDir=/usr/local/kafka/data/zookeeper"
-        + "\nclientPort=2181\nmaxClientCnxns=0\nadmin.enableServer=false"
-    )
-    zookeeper_connect_str = "zookeeper.connect="
-    zookeeper_id = 1  # zookeeper id starts from 1
-    for rgw_node_obj in rgw_nodes:
-        rgw_node = rgw_node_obj.node
-        log.info(f"installing kafka on node {rgw_node.ip_address}")
-        rgw_node.exec_command(
-            sudo=True,
-            cmd="yum install -y https://download.oracle.com/java/24/latest/jdk-24_linux-x64_bin.rpm",
-        )
-        install_kafka(rgw_node, cloud_type)
-        rgw_node.exec_command(
-            sudo=True, cmd="mkdir -p /usr/local/kafka/data/zookeeper/"
-        )
-        rgw_node.exec_command(
-            sudo=True,
-            cmd=f"echo '{zookeeper_id}' > /usr/local/kafka/data/zookeeper/myid",
-        )
-        zookeeper_properties_str = f"{zookeeper_properties_str}\nserver.{zookeeper_id}={rgw_node.ip_address}:2888:3888"
-        zookeeper_connect_str = f"{zookeeper_connect_str}{rgw_node.ip_address}:2181,"
-        zookeeper_id = zookeeper_id + 1
-    # remove redundant last comma
-    zookeeper_connect_str = zookeeper_connect_str[:-1]
-
-    # configure kafka on rgw node1
-    rgw_node1_obj = rgw_nodes.pop(0)
-    rgw_node1 = rgw_node1_obj.node
-    rgw_node1_ip = rgw_node1.ip_address
-    setup_server_properties_security_configs(rgw_node1, cloud_type)
-    setup_keystore_certs(rgw_node1, cloud_type)
-    rgw_node1.exec_command(
-        sudo=True,
-        cmd=f"echo '{zookeeper_properties_str}' > /usr/local/kafka/config/zookeeper.properties",
-    )
-    rgw_node1.exec_command(
-        sudo=True,
-        cmd=f"sed -i 's|zookeeper.connect=localhost:2181|{zookeeper_connect_str}|'"
-        + f" {KAFKA_HOME}/config/server.properties",
-    )
-    start_zookeeper_service(rgw_node1)
-
-    # setup kafka on other rgw nodes similar to kafka setup on rgw node1
-    listener_string_old = (
-        f"listeners=PLAINTEXT://{rgw_node1_ip}:9092,SSL://{rgw_node1_ip}:9093,"
-        + f"SASL_SSL://{rgw_node1_ip}:9094,SASL_PLAINTEXT://{rgw_node1_ip}:9095"
-    )
-    broker_id = (
-        1  # broker_id is by default 0, so from node2 onwards broker_id starts from 1
-    )
-    rgw_node1.exec_command(sudo=True, cmd="sudo yum install -y sshpass")
-    for rgw_node_obj in rgw_nodes:
-        rgw_node = rgw_node_obj.node
-        rgw_node_ip = rgw_node.ip_address
-        # copy configured server.properties and zookeeper.properties from rgw node1 to current rgw mode
-        rgw_node1.exec_command(
-            sudo=True,
-            cmd="sshpass -p 'passwd'"
-            + f" scp -o StrictHostKeyChecking=no {KAFKA_HOME}/config/zookeeper.properties"
-            + f" root@{rgw_node_ip}:{KAFKA_HOME}/config/zookeeper.properties",
-        )
-        rgw_node1.exec_command(
-            sudo=True,
-            cmd="sshpass -p 'passwd'"
-            + f" scp -o StrictHostKeyChecking=no {KAFKA_HOME}/config/server.properties"
-            + f" root@{rgw_node_ip}:{KAFKA_HOME}/config/server.properties",
-        )
-
-        # copy keystore, truststore and certs used for kafka security to other rgw node
-        rgw_node1.exec_command(
-            sudo=True,
-            cmd="sshpass -p 'passwd'"
-            + f" scp -o StrictHostKeyChecking=no server.truststore.jks server.keystore.jks  root@{rgw_node_ip}:~/",
-        )
-        rgw_node1.exec_command(
-            sudo=True,
-            cmd="sshpass -p 'passwd'"
-            + f" scp -o StrictHostKeyChecking=no {KAFKA_HOME}/localhost.crt {KAFKA_HOME}/localhost.req"
-            + f" {KAFKA_HOME}/y-ca.crt  {KAFKA_HOME}/y-ca.key {KAFKA_HOME}/y-ca.srl"
-            + f" root@{rgw_node_ip}:/usr/local/kafka/",
-        )
-        # overwrite broker_id from 0 to current broker_id
-        rgw_node.exec_command(
-            sudo=True,
-            cmd=f"sed -i 's|broker.id=0|broker.id={broker_id}|' {KAFKA_HOME}/config/server.properties",
-        )
-        # overwrite listener with current rgw node ip
-        listener_string_new = (
-            f"listeners=PLAINTEXT://{rgw_node_ip}:9092,SSL://{rgw_node_ip}:9093,"
-            + f"SASL_SSL://{rgw_node_ip}:9094,SASL_PLAINTEXT://{rgw_node_ip}:9095"
-        )
-        rgw_node.exec_command(
-            sudo=True,
-            cmd=f"sed -i 's|{listener_string_old}|{listener_string_new}|' {KAFKA_HOME}/config/server.properties",
-        )
-        # start zookeeper service
-        start_zookeeper_service(rgw_node)
-        broker_id = broker_id + 1
-
-    # wait for zookeeper service to start
-    time.sleep(30)
-
-    rgw_nodes.insert(0, rgw_node1_obj)
-    for rgw_node_obj in rgw_nodes:
-        rgw_node = rgw_node_obj.node
-        # start kafka service
-        start_kafka_broker(rgw_node)
-        # wait for kafka service to start
-        time.sleep(30)
-
-    # add kafka configs for user alice so that sasl security mechanism works
-    add_kafka_config_for_user(rgw_node1)
-
-    # redeploy rgw service so that kafka certs are mounted to rgw container to be used for authentication
-    redeploy_rgw_service_for_kafka_security(rgw_node1)
 
 
 def config_keystone_ldap(rgw_node, cloud_type):
@@ -2413,35 +2227,6 @@ def fetch_image_tag(rhbuild):
         raise TestSetupFailure(f"Could not fetch image tag : {e}")
 
 
-def fetch_build_version(rhbuild, version, ibm_build=None):
-    """Retrieves ceph-version from magna002 artifacts
-    for a particular build
-
-        Args:
-            rhbuild: downstream ceph version | 8.1, 7.1-rhel-9, 6.1
-            version: build section to be fetched | 'latest', z1, z2, z3
-            ibm_build: flag to fetch IBM build detail
-        Returns:
-            ceph-version from recipe file
-            e.g. - 19.2.1-230 | 18.2.1-340
-    """
-    try:
-        # Todo: add support for Upstream build if necessary
-        _ver = str(rhbuild).split("-")[0]
-        recipe_url = get_cephci_config().get("build-url", magna_rhcs_artifacts)
-        filename = f"RHCEPH-{_ver}.yaml"
-        if ibm_build:
-            filename = f"IBMCEPH-{_ver}.yaml"
-
-        url = f"{recipe_url}{filename}"
-        data = requests.get(url, verify=False)
-        yml_data = yaml.safe_load(data.text)
-
-        return yml_data[version]["ceph-version"]
-    except Exception as e:
-        raise TestSetupFailure(f"Could not fetch build details of : {e}")
-
-
 def validate_conf(conf):
     """
     Validates the global conf by checking unique ID for nodes.
@@ -2464,7 +2249,7 @@ def validate_conf(conf):
                 nodes_id.append(ceph_cluster[node].get("id") or f"{node}")
         else:
             nodes_id = [
-                node.get("id") or f"node{idx+1}" for idx, node in enumerate(nodes)
+                node.get("id") or f"node{idx + 1}" for idx, node in enumerate(nodes)
             ]
         log.info(f"List of Node IDs : {nodes_id}")
         if not (len(nodes_id) == len(set(nodes_id))):
@@ -2798,3 +2583,93 @@ def is_unsecured_registry(test_data):
             return insecure_registry_value  # Return boolean value for insecure-registry
 
     return False  # Default return value if conditions are not met
+
+
+def create_file(client, nfs_mount, file_name):
+    """Create a file in the NFS mount point"""
+    try:
+        if file_name not in lookup_in_directory(client,nfs_mount).strip().split('\n'):
+            cmd = f"touch {nfs_mount}/{file_name}"
+            client.exec_command(cmd=cmd, sudo=True)
+        log.info("File - {0} created successfully".format(file_name))
+    except Exception as e:
+        log.error(f"Failed to create file {file_name}: {e}")
+        raise OperationFailedError(f"Failed to create file {file_name}: {e}")
+
+
+def delete_file(client, nfs_mount, file_name):
+    """Delete a file in the NFS mount point"""
+    try:
+        cmd = f"rm -rf {nfs_mount}/{file_name}"
+        client.exec_command(cmd=cmd, sudo=True)
+        log.info("File - {0} deleted successfully".format(file_name))
+    except Exception as e:
+        log.error(f"Failed to delete file {file_name}: {e}")
+        raise OperationFailedError(f"Failed to delete file {file_name}: {e}")
+
+
+def rename_file(client, nfs_mount, old_name, new_name):
+    """Rename a file in the NFS mount point"""
+    try:
+        if new_name not in lookup_in_directory(client,nfs_mount).strip().split('\n'):
+            cmd = f"mv {nfs_mount}/{old_name} {nfs_mount}/{new_name}"
+            client.exec_command(cmd=cmd, sudo=True)
+            log.info("File renamed successfully")
+    except Exception as e:
+        log.error(f"Failed to rename file {old_name} to {new_name}: {e}")
+        raise OperationFailedError(
+            f"Failed to rename file {old_name} to {new_name}: {e}"
+        )
+
+
+def write_to_file_using_dd_command(client, nfs_mount, file_name, size):
+    """Write to a file in the NFS mount point using dd command"""
+    try:
+        cmd = f"dd if=/dev/zero of={nfs_mount}/{file_name} bs={size}M count=5"
+        client.exec_command(cmd=cmd, sudo=True)
+        log.info("File written successfully")
+    except Exception as e:
+        log.error(f"Failed to write to file {file_name}: {e}")
+        raise OperationFailedError(f"Failed to write to file {file_name}: {e}")
+
+
+def read_from_file_using_dd_command(client, nfs_mount, file_name, size):
+    """Read from a file in the NFS mount point using dd command"""
+    try:
+        cmd = f"dd if={nfs_mount}/{file_name} of=/dev/null bs={size}M count=5"
+        client.exec_command(cmd=cmd, sudo=True)
+        log.info("File read successfully")
+    except Exception as e:
+        log.error(f"Failed to read from file {file_name}: {e}")
+        raise OperationFailedError(f"Failed to read from file {file_name}: {e}")
+
+
+def permission_to_directory(client, nfs_mount):
+    """Provide permission to directory"""
+    try:
+        cmd = f"chmod 777 {nfs_mount}"
+        client.exec_command(cmd=cmd, sudo=True)
+        log.info("Permission provided successfully")
+    except Exception as e:
+        log.error(f"Failed to provide permission to directory {nfs_mount}: {e}")
+        raise OperationFailedError(
+            f"Failed to provide permission to directory {nfs_mount}: {e}"
+        )
+
+
+def lookup_in_directory(client, mount):
+    """
+    Check if the mount point is accessible and contains expected files.
+    Args:
+        client: Client node where the mount is performed.
+        mount: Mount point path.
+    Returns:
+        bool: True if the mount point is accessible and contains expected files, False otherwise.
+    """
+    try:
+        out, _ = client.exec_command(sudo=True, cmd=f"ls {mount}")
+        log.info(f"Contents of {mount}: {out.strip()}")
+        return out
+    except Exception as e:
+        log.error(f"Failed to access mount point {mount}: {e}")
+        return False
