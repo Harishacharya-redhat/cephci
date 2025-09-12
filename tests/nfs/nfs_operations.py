@@ -28,19 +28,19 @@ class NfsCleanupFailed(Exception):
 
 
 def setup_nfs_cluster(
-    clients,
-    nfs_server,
-    port,
-    version,
-    nfs_name,
-    nfs_mount,
-    fs_name,
-    export,
-    fs,
-    ha=False,
-    vip=None,
-    ceph_cluster=None,
-    active_standby=False,
+        clients,
+        nfs_server,
+        port,
+        version,
+        nfs_name,
+        nfs_mount,
+        fs_name,
+        export,
+        fs,
+        ha=False,
+        vip=None,
+        ceph_cluster=None,
+        active_standby=False,
 ):
     # Get ceph cluter object and setup start time
     global ceph_cluster_obj
@@ -219,19 +219,21 @@ def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export):
 
 
 def setup_custom_nfs_cluster_multi_export_client(
-    clients,
-    nfs_server,
-    port,
-    version,
-    nfs_name,
-    fs_name,
-    fs,
-    nfs_mount,
-    nfs_export,
-    ha=False,
-    vip=None,
-    export_num=None,
-    ceph_cluster=None,
+        clients,
+        nfs_server,
+        port,
+        version,
+        nfs_name,
+        fs_name,
+        fs,
+        nfs_mount,
+        nfs_export,
+        ha=False,
+        vip=None,
+        active_standby=None,
+        export_num=None,
+        ceph_cluster=None,
+        **kwargs
 ):
     # Get ceph cluter object and setup start time
     global ceph_cluster_obj
@@ -250,9 +252,18 @@ def setup_custom_nfs_cluster_multi_export_client(
     sleep(3)
 
     # Step 2: Create an NFS cluster
-    Ceph(clients[0]).nfs.cluster.create(
-        name=nfs_name, nfs_server=nfs_server, ha=ha, vip=vip
-    )
+    if kwargs.get("in-file", None):
+        """
+        this is needed Since "in" is the python keyword, and arg should be in-file. 
+        """
+        Ceph(clients[0]).nfs.cluster.create(
+            name=nfs_name, nfs_server=nfs_server, ha=ha, vip=vip, active_standby=active_standby,
+            **{"in-file": kwargs.get("in-file", None)},
+        )
+    else:
+        Ceph(clients[0]).nfs.cluster.create(
+            name=nfs_name, nfs_server=nfs_server, ha=ha, vip=vip, active_standby=active_standby
+        )
     sleep(3)
 
     # Step 3: Perform Export on clients
@@ -263,7 +274,7 @@ def setup_custom_nfs_cluster_multi_export_client(
     # Create the export and mount points for each client
     for client_num in range(len(clients)):
         for export_num in range(
-            len(client_export_mount_dict[clients[client_num]]["export"])
+                len(client_export_mount_dict[clients[client_num]]["export"])
         ):
             export_name = client_export_mount_dict[clients[client_num]]["export"][
                 export_num
@@ -276,6 +287,7 @@ def setup_custom_nfs_cluster_multi_export_client(
                 nfs_name=nfs_name,
                 nfs_export=export_name,
                 fs=fs,
+                enctag=kwargs.get("enctag", None)
             )
             sleep(1)
             # Get the mount versions specific to clients
@@ -289,11 +301,11 @@ def setup_custom_nfs_cluster_multi_export_client(
             for version, clients in mount_versions.items():
                 clients[client_num].create_dirs(dir_path=mount_name, sudo=True)
                 if Mount(clients[client_num]).nfs(
-                    mount=mount_name,
-                    version=version,
-                    port=port,
-                    server=nfs_server,
-                    export=export_name,
+                        mount=mount_name,
+                        version=version,
+                        port=port,
+                        server=nfs_server,
+                        export=export_name,
                 ):
                     raise OperationFailedError(
                         "Failed to mount nfs on %s" % clients[client_num].hostname
@@ -331,6 +343,8 @@ def setup_custom_nfs_cluster_multi_export_client(
 
     # Step 5: Enable nfs coredump to nfs nodes
     Enable_nfs_coredump(nfs_nodes)
+
+    return client_export_mount_dict
 
 
 def exports_mounts_perclient(clients, nfs_export, nfs_mount, export_num) -> dict:
@@ -374,7 +388,7 @@ def exports_mounts_perclient(clients, nfs_export, nfs_mount, export_num) -> dict
 
 
 def cleanup_custom_nfs_cluster_multi_export_client(
-    clients, nfs_mount, nfs_name, nfs_export, export_num
+        clients, nfs_mount, nfs_name, nfs_export, export_num
 ):
     """
     Clean up the cluster post nfs operation
@@ -415,7 +429,7 @@ def cleanup_custom_nfs_cluster_multi_export_client(
 
     for client_num in range(len(clients)):
         for export_num in range(
-            len(client_export_mount_dict[clients[client_num]]["export"])
+                len(client_export_mount_dict[clients[client_num]]["export"])
         ):
             export_name = client_export_mount_dict[clients[client_num]]["export"][
                 export_num
@@ -483,7 +497,7 @@ def _get_client_specific_mount_versions(versions, clients):
     for entry in versions:
         ver = list(entry.keys())[0]
         count = list(entry.values())[0]
-        version_dict[ver] = clients[ctr : ctr + int(count)]
+        version_dict[ver] = clients[ctr: ctr + int(count)]
         ctr = ctr + int(count)
     return version_dict
 
@@ -833,11 +847,11 @@ def open_mandatory_v3_ports(nfs_node, ports_to_open):
 @retry(OperationFailedError, tries=4, delay=5, backoff=2)
 def mount_retry(client, mount_name, version, port, nfs_server, export_name):
     if Mount(client).nfs(
-        mount=mount_name,
-        version=version,
-        port=port,
-        server=nfs_server,
-        export=export_name,
+            mount=mount_name,
+            version=version,
+            port=port,
+            server=nfs_server,
+            export=export_name,
     ):
         raise OperationFailedError("Failed to mount nfs on %s" % {export_name.hostname})
     return True
@@ -853,7 +867,7 @@ def fuse_mount_retry(client, mount, **kwargs):
         **kwargs: Additional arguments for the Mount method.
     """
     if FuseMount(client).mount(
-        client_hostname=client.hostname, mount_point=mount, **kwargs
+            client_hostname=client.hostname, mount_point=mount, **kwargs
     ):
         raise OperationFailedError("Failed to fuse mount nfs on %s" % client.hostname)
     return True
@@ -900,7 +914,7 @@ def verify_nfs_ganesha_service(node, timeout):
 
 
 def create_multiple_nfs_instance_via_spec_file(
-    spec, replication_number, installer, timeout=300
+        spec, replication_number, installer, timeout=300
 ):
     """
     Create multiple NFS Ganesha service instances from a base spec file.
@@ -974,7 +988,7 @@ def create_multiple_nfs_instance_via_spec_file(
 
 
 def dynamic_cleanup_common_names(
-    clients, mounts_common_name, clusters=None, mount_point="/mnt/", group_name=None
+        clients, mounts_common_name, clusters=None, mount_point="/mnt/", group_name=None
 ):
     """
     Dynamically clean up NFS resources by common name.
@@ -1139,3 +1153,12 @@ def nfs_log_parser(client, nfs_node, nfs_name, expect_list):
         return 1
 
     return 0
+
+
+def get_active_node_ha(client, nfs_name, nfs_nodes):
+    out = Ceph(client).nfs.cluster.info(nfs_name)
+    active_node_hostname = out[nfs_name]['backend'][0]['hostname']
+    for nfs_node in nfs_nodes:
+        if nfs_node.hostname == active_node_hostname:
+            return nfs_node
+    return None

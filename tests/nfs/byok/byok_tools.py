@@ -1,5 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+import tempfile
 
 import yaml
 
@@ -24,7 +25,7 @@ from utility.gklm_client.gklm_client import GklmClient
 
 
 def get_enctag(
-    gklm_client, created_client_data, gkml_client_name, gklm_cert_alias, gklm_user, cert
+        gklm_client, created_client_data, gkml_client_name, gklm_cert_alias, gklm_user, cert
 ):
     """
     Initialize a GKLM client, assign a certificate, and create a symmetric key object for encryption/decryption.
@@ -131,13 +132,13 @@ def validate_enc_for_nfs_export_via_fuse(client, fuse_mount, nfs_mount):
 
 
 def create_nfs_instance_for_byok(
-    installer,
-    nfs_node,
-    nfs_name,
-    kmip_host_list,
-    rsa_key,
-    cert,
-    ca_cert,
+        installer,
+        nfs_node,
+        nfs_name,
+        kmip_host_list,
+        rsa_key,
+        cert,
+        ca_cert,
 ):
     """
     Create an NFS Ganesha service instance with BYOK (Bring Your Own Key) KMIP configuration,
@@ -178,7 +179,7 @@ def create_nfs_instance_for_byok(
 
 
 def setup_gklm_infrastructure(
-    nfs_nodes, gklm_ip, gklm_node_password, gklm_hostname, gklm_node_username
+        nfs_nodes, gklm_ip, gklm_node_password, gklm_hostname, gklm_node_username
 ):
     """
     Prepare cluster nodes for GKLM integration: install sshpass, set up passwordless SSH,
@@ -198,22 +199,22 @@ def setup_gklm_infrastructure(
         Exception: If any step fails, logs the error and re-raises.
     """
     log.info("Setting up GKLM requirments")
-    exe_node = nfs_nodes[0]
-    log.info(
-        f"Installing sshpass on node {exe_node.hostname} for non-interactive SSH to GKLM"
-    )
-    Package(exe_node).install("sshpass")
-
-    log.info(
-        f"Setting up passwordless SSH from node {exe_node.hostname} to GKLM server {gklm_ip} as {gklm_node_username}"
-    )
-    cmd = f"sshpass -p {gklm_node_password} ssh-copy-id {gklm_node_username}@{gklm_ip}"
-    Ceph(exe_node).execute(cmd)
-    log.info(
-        f"Passwordless SSH established to GKLM server {gklm_ip} as user {gklm_node_username}"
-    )
 
     for node in nfs_nodes:
+        log.info(
+            f"Installing sshpass on node {node.hostname} for non-interactive SSH to GKLM"
+        )
+        Package(node).install("sshpass")
+
+        log.info(
+            f"Setting up passwordless SSH from node {node.hostname} to GKLM server {gklm_ip} as {gklm_node_username}"
+        )
+        cmd = f"sshpass -p {gklm_node_password} ssh-copy-id {gklm_node_username}@{gklm_ip}"
+        Ceph(node).execute(cmd)
+        log.info(
+            f"Passwordless SSH established to GKLM server {gklm_ip} as user {gklm_node_username}"
+        )
+
         log.info(
             f"Updating /etc/hosts on NFS node {node.hostname} with GKLM server {gklm_hostname} at {gklm_ip}"
         )
@@ -236,7 +237,7 @@ def setup_gklm_infrastructure(
             rf'sudo sed -i -e "/$gklm_hostname\>/d" -e "/^$gklm_ip\>/d" /etc/hosts && '
             rf'echo "$gklm_ip $gklm_hostname" | sudo tee -a /etc/hosts"'
         )
-        out = Ceph(exe_node).execute(sudo=True, cmd=cmd)
+        out = Ceph(node).execute(sudo=True, cmd=cmd)
         log.info(
             f"Updated /etc/hosts on GKLM server with NFS node {node.hostname} entry. Result: {out}"
         )
@@ -244,16 +245,16 @@ def setup_gklm_infrastructure(
     log.info(
         "GKLM infrastructure setup completed: sshpass installed, SSH keys exchanged, hostnames synchronized"
     )
-    return exe_node
+    return nfs_nodes[0]
 
 
 def get_gklm_ca_certificate(
-    gklm_ip,
-    gklm_node_password,
-    gklm_node_username,
-    exe_node,
-    gklm_rest_client,
-    gkml_servering_cert_name="self-signed-cert1",
+        gklm_ip,
+        gklm_node_password,
+        gklm_node_username,
+        exe_node,
+        gklm_rest_client,
+        gkml_servering_cert_name="self-signed-cert1",
 ):
     """
     Retrieve the GKLM CA certificate for use in the cluster:
@@ -283,7 +284,7 @@ def get_gklm_ca_certificate(
             x["uuid"]
             for x in certs
             if x.get("usage") == "SSLSERVER"
-            and x.get("alias") == gkml_servering_cert_name
+               and x.get("alias") == gkml_servering_cert_name
         ][0]
         log.info(f"Found target certificate with UUID: {certificate_uuid_to_export}")
     except IndexError:
@@ -348,12 +349,12 @@ def get_gklm_ca_certificate(
 
 
 def pre_requisite_for_gklm_get_ca(
-    nfs_nodes,
-    gklm_ip,
-    gklm_node_password,
-    gklm_hostname,
-    gklm_node_username,
-    gklm_rest_client,
+        nfs_nodes,
+        gklm_ip,
+        gklm_node_password,
+        gklm_hostname,
+        gklm_node_username,
+        gklm_rest_client,
 ):
     """
     Orchestrate all prerequisites for GKLM integration:
@@ -643,14 +644,14 @@ def nfs_byok_test_setup(byok_setup_params):
 
 
 def create_multiple_nfs_instance_for_byok(
-    spec: dict,
-    replication_number: int,
-    installer,
-    cert: str,
-    rsa_key: str,
-    ca_cert: str,
-    kmip_host_list: str,
-    timeout: int = 300,
+        spec: dict,
+        replication_number: int,
+        installer,
+        cert: str,
+        rsa_key: str,
+        ca_cert: str,
+        kmip_host_list: str,
+        timeout: int = 300,
 ) -> int:
     """
     Create multiple BYOK-enabled NFS Ganesha service instances using a given service spec.
@@ -706,12 +707,12 @@ def create_multiple_nfs_instance_for_byok(
 
 
 def perform_io_operations_and_validate_fuse(
-    client_export_mount_dict,
-    clients,
-    file_count,
-    dd_command_size_in_M,
-    is_multicluster=False,
-    nfs_name=None,
+        client_export_mount_dict,
+        clients,
+        file_count,
+        dd_command_size_in_M,
+        is_multicluster=False,
+        nfs_name=None,
 ):
     """
     Perform IO operations on mounted NFS exports for single or multiple clusters.
@@ -867,3 +868,49 @@ def perform_io_operations_and_validate_fuse(
         log.info("Running IO operations on single cluster")
         _process_single_cluster(client_export_mount_dict, nfs_name, is_multicluster)
         log.info("Completed all IO operations")
+
+
+def create_in_file_certs(certs_dict, node):
+    """
+    Create a temporary YAML file containing certificate specifications and return its path.
+    This function serializes the provided certificate documents into YAML (using
+    yaml.dump_all with sort_keys=False and an indent of 2), writes the encoded bytes
+    to a temporary file created with tempfile.NamedTemporaryFile, and returns the
+    temporary file path. If installer_node is a sequence, the first element is
+    used. The function opens a remote file handle via installer_node.remote_file(...)
+    with sudo=True and file_mode="wb" and writes the YAML bytes to that handle,
+    flushing the file before returning.
+    Args:
+        certs_dict: dict of certs
+        installer_node: installer
+    Returns:
+        str: The filesystem path of the created temporary YAML file (tempfile.NamedTemporaryFile.name).
+    Side effects:
+        - Creates a temporary file on the installer filesystem.
+        - Uses installer_node.remote_file to obtain a writable file handle (sudo=True)
+          and writes the YAML-encoded certificate data to that handle.
+        - Logs the path of the created temporary certificate spec file.
+    Raises:
+        Any exception raised by tempfile.NamedTemporaryFile, yaml.dump_all, the
+        installer_node.remote_file call, or the file write/flush operations may be
+        propagated to the caller.
+    Notes:
+        - The temporary file remains until explicitly removed or closed; callers
+          should clean up the file when it is no longer needed.
+        - The function encodes YAML output as UTF-8 before writing.
+    """
+    temp_file = tempfile.NamedTemporaryFile(suffix=".yaml", delete=False)
+
+    # Handle case where installer_node is a list
+    if isinstance(node, list):
+        node = node[0]
+
+    spec_file = node.remote_file(
+        sudo=True, file_name=temp_file.name, file_mode="wb"
+    )
+    spec = yaml.dump(certs_dict, sort_keys=False, indent=2).encode("utf-8")
+    spec_file.write(spec)
+    spec_file.flush()
+    log.info(f"Created temporary certificate spec file at {temp_file.name} in {node.hostname}")
+
+    return temp_file.name

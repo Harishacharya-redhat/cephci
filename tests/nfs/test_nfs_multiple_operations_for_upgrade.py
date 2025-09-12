@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from cli.exceptions import ConfigError, OperationFailedError
 from tests.nfs.nfs_operations import cleanup_cluster, setup_nfs_cluster
 from utility.log import Log
+from utility.retry import retry
 
 log = Log(__name__)
 
@@ -25,15 +26,19 @@ def lookup_in_directory(client, mount):
         return False
 
 
-def create_file(client, nfs_mount, file_name):
-    """Create a file in the NFS mount point"""
+def create_file(client, nfs_mount, file_name, file_size="10M"):
     try:
-        if file_name not in client.get_dir_list(nfs_mount):
-            cmd = f"touch {nfs_mount}/{file_name}"
-            client.exec_command(cmd=cmd, sudo=True)
-            log.info("File - {0} created successfully".format(file_name))
+        # Safe check for file existence
+        dir_contents = client.get_dir_list(nfs_mount) or []  # Handle None case
+
+        if file_name not in dir_contents:
+            cmd = f"dd if=/dev/zero of={nfs_mount}/{file_name} bs={file_size} count=1"
+            out, err = client.exec_command(cmd=cmd, sudo=True)
+            log.info(f"Created file {file_name}")
+        else:
+            log.info(f"File {file_name} already exists")
+
     except Exception as e:
-        log.error(f"Failed to create file {file_name}: {e}")
         raise OperationFailedError(f"Failed to create file {file_name}: {e}")
 
 
@@ -62,6 +67,7 @@ def rename_file(client, nfs_mount, old_name, new_name):
         )
 
 
+@retry(OperationFailedError, tries=3, delay=20, backoff=5)
 def write_to_file_using_dd_command(client, nfs_mount, file_name, size):
     """Write to a file in the NFS mount point using dd command"""
     try:
@@ -73,6 +79,7 @@ def write_to_file_using_dd_command(client, nfs_mount, file_name, size):
         raise OperationFailedError(f"Failed to write to file {file_name}: {e}")
 
 
+@retry(OperationFailedError, tries=3, delay=20, backoff=5)
 def read_from_file_using_dd_command(client, nfs_mount, file_name, size):
     """Read from a file in the NFS mount point using dd command"""
     try:
@@ -98,19 +105,19 @@ def permission_to_directory(client, nfs_mount):
 
 
 def create_nfs_cluster(
-    clients,
-    nfs_server_name,
-    port,
-    version,
-    nfs_name,
-    nfs_mount,
-    fs_name,
-    nfs_export,
-    fs,
-    ceph_cluster=None,
-    ha=False,
-    vip=None,
-    active_standby=False,
+        clients,
+        nfs_server_name,
+        port,
+        version,
+        nfs_name,
+        nfs_mount,
+        fs_name,
+        nfs_export,
+        fs,
+        ceph_cluster=None,
+        ha=False,
+        vip=None,
+        active_standby=False,
 ):
     """Create NFS cluster"""
     try:
