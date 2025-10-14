@@ -8,6 +8,7 @@ from time import sleep
 
 import yaml
 
+from ceph.ceph import CommandFailed
 from ceph.waiter import WaitUntil
 from cli.ceph.ceph import Ceph
 from cli.cephadm.cephadm import CephAdm
@@ -144,7 +145,7 @@ def setup_nfs_cluster(
     Enable_nfs_coredump(nfs_nodes)
 
 
-def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export):
+def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes =None):
     """
     Clean up the cluster post nfs operation
     Steps:
@@ -171,6 +172,7 @@ def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export):
                 raise NfsCleanupFailed(
                     "Coredump generated post execution of the current test case"
                 )
+    nfs_log_parser(client=clients[0], nfs_node=nfs_nodes, nfs_name=nfs_name)
 
     # Wait until the rm operation is complete
     timeout, interval = 600, 10
@@ -392,7 +394,7 @@ def exports_mounts_perclient(clients, nfs_export, nfs_mount, export_num) -> dict
 
 
 def cleanup_custom_nfs_cluster_multi_export_client(
-    clients, nfs_mount, nfs_name, nfs_export, export_num
+    clients, nfs_mount, nfs_name, nfs_export, export_num, nfs_nodes=None
 ):
     """
     Clean up the cluster post nfs operation
@@ -424,6 +426,7 @@ def cleanup_custom_nfs_cluster_multi_export_client(
                     "Coredump generated post execution of the current test case"
                 )
 
+    nfs_log_parser(client=clients[0], nfs_node=nfs_nodes, nfs_name=nfs_name)
     # Wait until the rm operation is complete
     timeout, interval = 600, 10
 
@@ -1016,7 +1019,6 @@ def dynamic_cleanup_common_names(
     """
     if not isinstance(clients, list):
         clients = [clients]
-
     # Check for NFS coredump on all NFS nodes before cleanup
     if ceph_cluster_obj:
         nfs_nodes = ceph_cluster_obj.get_nodes("nfs")
@@ -1215,7 +1217,7 @@ def get_ganesha_info_from_container(installer, nfs_service_name, nfs_host_node):
         return (None, None)
 
 
-def nfs_log_parser(client, nfs_node, nfs_name, expect_list):
+def nfs_log_parser(client, nfs_node, nfs_name, expect_list=None):
     """
     This method parses the nfs debug log for given list of strings and returns 0 on Success
     and 1 on failure
@@ -1229,28 +1231,49 @@ def nfs_log_parser(client, nfs_node, nfs_name, expect_list):
     out = list(client.exec_command(sudo=True, cmd=cmd))[0]
     nfs_daemon_name = out.split()[0]
     results = {"expect": {}}
-    for search_str in expect_list:
-        cmd = f"cephadm logs --name {nfs_daemon_name} > nfs_log"
-        nfs_node.exec_command(sudo=True, cmd=cmd)
-        try:
-            cmd = f'grep "{search_str}" nfs_log'
-            out = nfs_node.exec_command(sudo=True, cmd=cmd)
-            if len(out) > 0:
-                log.info(
-                    f"Found {search_str} in {nfs_daemon_name} log on {nfs_node.hostname}:\n {out}"
-                )
-                results["expect"].update({search_str: nfs_node})
-        except BaseException as ex:
-            log.info(ex)
+    if expect_list:
+        for search_str in expect_list:
+            cmd = f"cephadm logs --name {nfs_daemon_name} > nfs_log"
+            nfs_node.exec_command(sudo=True, cmd=cmd)
+            try:
+                cmd = f'grep "{search_str}" nfs_log'
+                out = nfs_node.exec_command(sudo=True, cmd=cmd)
+                if len(out) > 0:
+                    log.info(
+                        f"Found {search_str} in {nfs_daemon_name} log on {nfs_node.hostname}:\n {out}"
+                    )
+                    results["expect"].update({search_str: nfs_node})
+            except BaseException as ex:
+                log.info(ex)
 
-    expect_not_found = []
-    for exp_str in expect_list:
-        if exp_str not in results["expect"]:
-            expect_not_found.append(exp_str)
-    if len(expect_not_found):
-        log.error(
-            f"Some of expected strings not found in debug logs for {nfs_daemon_name}:{expect_not_found}"
-        )
-        return 1
+        expect_not_found = []
+        for exp_str in expect_list:
+            if exp_str not in results["expect"]:
+                expect_not_found.append(exp_str)
+        if len(expect_not_found):
+            log.error(
+                f"Some of expected strings not found in debug logs for {nfs_daemon_name}:{expect_not_found}"
+            )
+            return 1
+        return 0
 
-    return 0
+    else:
+        for node in nfs_node:
+            try:
+                log.info(Ceph(client).orch.ls())
+                log.info("\n"+"-"*30 + "Fetching logs" + "-"*30)
+                nfs_containers_deatail = [x for x in
+                                        node.exec_command(sudo=True, cmd=f"podman ps | grep {nfs_name}")[0].split("\n")
+                                        if x and "ceph/keepalived" not in x]
+                nfs_containers = [x.split(" ")[0] for x in
+                        node.exec_command(sudo=True, cmd=f"podman ps | grep {nfs_name}")[0].split("\n")
+                                  if x and "ceph/keepalived" not in x]
+                container_logs = ["\n".join(node.exec_command(sudo=True,cmd = f"podman logs {container}")) for
+                                  container in nfs_containers]
+
+                log.info("\n\nNFS containers logs on {0}\n".format(node.hostname))
+                for container, logs in zip(nfs_containers_deatail, container_logs):
+                    log.info("\nLogs for container {0}:\n{1}\n".format(container,logs))
+            except CommandFailed:
+                log.error("Failed to fetch logs for {0} on {1}\n".format(nfs_daemon_name, node.hostname))
+
