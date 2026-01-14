@@ -638,6 +638,7 @@ def run(ceph_cluster, **kw):
     nfs_export = "/export"
     nfs_mount = "/mnt/nfs"
     fs = "cephfs"
+    cluster_qos =  config.get("cluster_qos", False)
     subvolume_group = "ganeshagroup"
 
     if not nfs_nodes:
@@ -656,6 +657,8 @@ def run(ceph_cluster, **kw):
     _orig_exec = client.exec_command
     ceph_nfs_client = Ceph(client).nfs
     Ceph(client).fs.sub_volume_group.create(volume=fs_name, group=subvolume_group)
+    if cluster_qos:
+
 
     try:
         # Setup nfs cluster

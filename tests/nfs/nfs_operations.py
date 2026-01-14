@@ -909,6 +909,7 @@ def verify_nfs_ganesha_service(node, timeout):
             )
             log.info("sleep(20)  # Allow some time for the service to stabilize")
             sleep(20)  # Allow some time for the service to stabilize
+
             return True
         else:
             log.info(
