@@ -79,3 +79,18 @@ Enhance `nfs_log_parser` in `tests/nfs/nfs_operations.py` to automatically aggre
 2. **`test_nfs_v4_ssc.py`**: Verify Server-Side Copy between two CephFS exports.
 3. **`test_nfs_kerberos_setup.py`**: A complex test involving a KDC to verify secure mounts.
 4. **`test_nfs_scale_exports.py`**: Script to create 1000+ exports and verify Ganesha stability.
+
+## 7. NFS Protocol-Side Automations
+
+The `cephci` framework utilizes several industry-standard tools for protocol-level verification, but there are opportunities for deeper automation.
+
+### 7.1. Existing Protocol Automations
+- **pynfs:** Automated via `tests/nfs/nfs_verify_pynfs.py`. It runs the Linux NFS team's protocol test suite against the Ceph NFS cluster.
+- **NFStest:** Automated via `tests/nfs/nfs_run_nfslocktest_suite.py`. Specifically used for verifying POSIX and NFS locking semantics.
+- **FIO:** Used in various scale and stress tests (e.g., `nfs_scale_with_multi_io.py`) to automate protocol-level I/O patterns and verify data integrity.
+
+### 7.2. Protocol Automation Gaps
+- **Interop Matrix Automation:** Lack of an automated way to run the same protocol tests across a matrix of client OSs (RHEL, Ubuntu, Windows, SLES) and NFS versions (3, 4.0, 4.1, 4.2) simultaneously.
+- **Protocol Fuzzing:** No automated protocol fuzzing (e.g., using `AFL` or `Sulley`) to test the robustness of the Ganesha XDR decoding and RPC handling.
+- **Network-Level Automation:** Missing automation for network-level disruptions (packet loss, reordering, fragmentation) specifically targeting the NFS RPC stream to verify protocol-level recovery.
+- **Compliance Tracking:** Lack of automated extraction and trending of `pynfs` results over time to identify protocol regressions in newer Ceph/Ganesha releases.
