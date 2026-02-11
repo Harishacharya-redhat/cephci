@@ -23,6 +23,9 @@ The current test suites are organized by release: Reef, Squid, and Tentacle.
     - SELinux context preservation and enforcement are tested.
 - **Client Interoperability:** Includes tests for various Linux distributions and Windows clients.
 
+### 2.2. Performance Benchmarking
+- **SPECstorage:** Automated via `tests/nfs/nfs_spec_storage.py`. This tool is used to validate NFS performance under various workloads (e.g., SWBUILD) and scale. It ensures that the Ganesha gateway does not become a bottleneck for the Ceph backend.
+
 ## 3. NFS Internal Workflows in Ceph
 Understanding these workflows is crucial for identifying deep-seated gaps.
 
@@ -37,7 +40,13 @@ Understanding these workflows is crucial for identifying deep-seated gaps.
 2. **FSAL Layer:** Ganesha's File System Abstraction Layer (FSAL) translates NFS requests into `libcephfs` or `librgw` calls.
 3. **Ceph Interaction:** `libcephfs`/`librgw` communicates with MDS/OSD/RGW to fulfill the request.
 
-## 4. Identified Gaps
+### 3.3. Provisioning Workflow
+1. **Export Creation:** When a user calls `ceph nfs export create cephfs`, the MGR module:
+    - Validates the existence of the CephFS volume and path.
+    - (Optionally) Creates a CephFS subvolume if the framework utility is used.
+    - Generates a Ganesha EXPORT block and stores it in the RADOS configuration pool.
+2. **Notification:** The Ganesha daemons, which are watching the RADOS objects, receive a notification of the new/updated object.
+3. **Dynamic Loading:** Ganesha's `dbus` interface or its internal RADOS watcher triggers a config reload, making the new export immediately available to clients without service disruption.
 
 ### 4.1. RGW NFS Integration Gaps
 - **Modern CLI:** There is a lack of tests for the `ceph nfs export create rgw` command. Most existing RGW NFS tests use a legacy approach that doesn't align with the current product direction of unified management.
