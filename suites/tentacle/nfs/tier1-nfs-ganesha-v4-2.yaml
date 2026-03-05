@@ -217,7 +217,7 @@ tests:
         nfs_version: 4.2
         clients: 1
         operation: default_permissions
-
+# ---------------------------------non-root
   - test:
       name: Verify that hard links remain valid after an NFS server reboot.
       module: nfs_hard_links_server_reboot.py

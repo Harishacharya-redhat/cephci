@@ -1672,9 +1672,10 @@ class CephNode(object):
 
             _time = (datetime.datetime.now() - _exec_start_time).total_seconds()
             logger.info(
-                "Execution of %s on %s took %s seconds",
+                "Execution of %s on %s by user %s took %s seconds",
                 cmd,
                 self.ip_address,
+                channel.get_transport().get_username(),
                 str(_time),
             )
 

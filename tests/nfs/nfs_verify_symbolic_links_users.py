@@ -51,22 +51,22 @@ def run(ceph_cluster, **kw):
 
         # Create file
         cmd = f"touch {nfs_mount}/test1_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        clients[0].exec_command(cmd=cmd )
 
         # Change owner of file to "cephuser"
         cmd = f"chown cephuser {nfs_mount}/test1_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        clients[0].exec_command(cmd=cmd )
 
         # Create symbolic link
         cmd = f"ln -s {nfs_mount}/test1_file {nfs_mount}/link1_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        clients[0].exec_command(cmd=cmd )
 
         # verify owner of symbloic link file and target file is different
         owner_target_file = clients[0].exec_command(
-            cmd="ls -l /mnt/nfs/test1_file | awk '{print $3}'", sudo=True
+            cmd="ls -l /mnt/nfs/test1_file | awk '{print $3}'" 
         )[0]
         owner_sym_link_file = clients[0].exec_command(
-            cmd="ls -l /mnt/nfs/link1_file | awk '{print $3}'", sudo=True
+            cmd="ls -l /mnt/nfs/link1_file | awk '{print $3}'" 
         )[0]
         if owner_target_file == owner_sym_link_file:
             raise OperationFailedError("Owner of target and sym link files same")

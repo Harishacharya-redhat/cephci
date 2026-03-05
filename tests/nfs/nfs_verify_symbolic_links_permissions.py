@@ -51,20 +51,20 @@ def run(ceph_cluster, **kw):
 
         # Create file
         cmd = f"touch {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        clients[0].exec_command(cmd=cmd )
 
         # Remove read and write permission for all other users
         cmd = f"chmod 600 {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        clients[0].exec_command(cmd=cmd )
 
         # Create symbolic link
         cmd = f"ln -s {nfs_mount}/test_file {nfs_mount}/link_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        clients[0].exec_command(cmd=cmd )
 
         # Try accessing the file using other user "cephuser"
         try:
             cmd = f"su cephuser -c 'cat {nfs_mount}/link_file'"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd )
         except Exception as e:
             if "Permission denied" in str(e):
                 log.info(

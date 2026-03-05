@@ -50,25 +50,25 @@ def run(ceph_cluster, **kw):
         if operation == "verify_permission":
             # Create file in nfs share
             cmd = f"touch {nfs_mount}/test_file"
-            clients[1].exec_command(cmd=cmd, sudo=True)
+            clients[1].exec_command(cmd=cmd)
 
             # Now modify the permission of the file to root user only
             cmd = f"chown -R root {nfs_mount}/test_file"
-            clients[1].exec_command(cmd=cmd, sudo=True)
+            clients[1].exec_command(cmd=cmd)
 
             # Set the permissions to be read only for just the user
             cmd = f"chmod -R 400 {nfs_mount}/test_file"
-            clients[1].exec_command(cmd=cmd, sudo=True)
+            clients[1].exec_command(cmd=cmd)
 
             # Now create a new user and try reading the file
             cmd = "useradd test_non_root_user"
-            clients[1].exec_command(cmd=cmd, sudo=True, check_ec=False)
+            clients[1].exec_command(cmd=cmd, check_ec=False)
 
             # Try accessing the file using the new user
             flag = False
             try:
                 cmd = f"su test_non_root_user -c 'cat {nfs_mount}/test_file'"
-                clients[1].exec_command(cmd=cmd, sudo=True)
+                clients[1].exec_command(cmd=cmd)
                 flag = True
             except Exception as e:
                 if "Permission denied" in str(e):
@@ -89,7 +89,7 @@ def run(ceph_cluster, **kw):
             flag = False
             try:
                 cmd = f"cat {nfs_mount}/non_existing_file"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                clients[0].exec_command(cmd=cmd)
                 flag = True
             except Exception as e:
                 log.info(f"Expected. Failed to read a non existing file. {e}")
@@ -103,7 +103,7 @@ def run(ceph_cluster, **kw):
             flag = False
             try:
                 cmd = f"cat 'some random text' {nfs_mount}/non_existing_file"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                clients[0].exec_command(cmd=cmd)
                 flag = True
             except Exception as e:
                 log.info(f"Expected. Failed to write a non existing file. {e}")
@@ -114,20 +114,20 @@ def run(ceph_cluster, **kw):
                 )
         elif operation == "mv_file":
             cmd = f"touch {nfs_mount}/test_file"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd)
 
             # Now modify the permission of the file to root user only
             cmd = f"chown -R root {nfs_mount}/test_file"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd)
 
             # Set the permissions to be read only for just the user
             cmd = f"chmod -R 400 {nfs_mount}/test_file"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd)
 
             # Now create a new user and try reading the file
             try:
                 cmd = "useradd test_non_root_user"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                clients[0].exec_command(cmd=cmd)
             except Exception as e:
                 log.error(f"User creation failed with {str(e)}")
 
@@ -135,7 +135,7 @@ def run(ceph_cluster, **kw):
             flag = False
             try:
                 cmd = f"su test_non_root_user -c 'mv {nfs_mount}/test_file /mnt'"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                clients[0].exec_command(cmd=cmd)
                 flag = True
             except Exception as e:
                 if "Permission denied" in str(e):
@@ -154,18 +154,18 @@ def run(ceph_cluster, **kw):
         elif operation == "mv_file_overwrite":
             # Create two files
             cmd = f"echo test1 > {nfs_mount}/file1"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd)
 
             cmd = "echo test2 > /mnt/file1"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd)
 
             # Now use mv to replace test1 with test2
             cmd = f"mv /mnt/file1 {nfs_mount}/file1"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            clients[0].exec_command(cmd=cmd)
 
             # Verify the file1 inside nfs share has content of the moved file
             cmd = f"cat {nfs_mount}/file1"
-            out, _ = clients[0].exec_command(cmd=cmd, sudo=True)
+            out, _ = clients[0].exec_command(cmd=cmd)
             if "test2" not in out:
                 raise OperationFailedError(
                     "Mv operation doesn't overwrite the content of existing file"
