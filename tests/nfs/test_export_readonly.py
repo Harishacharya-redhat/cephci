@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError, OperationFailedError
@@ -29,6 +35,7 @@ def run(ceph_cluster, **kw):
     # RO export parameters
     nfs_export_readonly = "/exportRO"
     nfs_readonly_mount = "/mnt/nfs_readonly"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -50,6 +57,7 @@ def run(ceph_cluster, **kw):
             fs_name,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Create export with RO permission
         Ceph(clients[0]).nfs.export.create(
@@ -73,9 +81,9 @@ def run(ceph_cluster, **kw):
             return 1
         log.info("Mount succeeded on client")
 
-        # Test writes on Readonly export
-        _, rc = clients[0].exec_command(
-            sudo=True, cmd=f"touch {nfs_readonly_mount}/file_ro", check_ec=False
+        # Test writes on Readonly export (expect fail)
+        _, rc = run_as_user(
+            clients[0], f"touch {nfs_readonly_mount}/file_ro", run_user, check_ec=False
         )
         # Ignore the "Read-only file system" error and consider it as a successful execution
         if "touch: cannot touch" in str(rc) and "Read-only file system" in str(rc):
@@ -84,11 +92,8 @@ def run(ceph_cluster, **kw):
         else:
             log.error(f"failed to create file on {clients[0].hostname}")
 
-        # Test writes on RW export
-        clients[0].exec_command(
-            sudo=True,
-            cmd=f"touch {nfs_mount}/file_rw",
-        )
+        # Test writes on RW export (as run_user when set)
+        run_as_user(clients[0], f"touch {nfs_mount}/file_rw", run_user)
         return 0
 
     except Exception as e:

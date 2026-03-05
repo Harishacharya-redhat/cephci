@@ -1,6 +1,12 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -20,6 +26,7 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -48,29 +55,18 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create file in local file system
-        cmd = f"touch {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
-
-        # Create hard links
-        cmd = f"ln {nfs_mount}/test_file {nfs_mount}/link_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        # Create file and hard links on NFS mount (as run_user when set)
+        run_as_user(clients[0], f"touch {nfs_mount}/test_file", run_user)
+        run_as_user(clients[0], f"ln {nfs_mount}/test_file {nfs_mount}/link_file", run_user)
 
         # Check inode for original and hard link file
         original_file_inode = (
-            clients[0]
-            .exec_command(cmd="ls -i /mnt/nfs/test_file | awk '{print $1}'", sudo=True)[
-                0
-            ]
-            .strip()
+            run_as_user(clients[0], f"ls -i {nfs_mount}/test_file | awk '{{print $1}}'", run_user)[0].strip()
         )
         hard_link_file_inode = (
-            clients[0]
-            .exec_command(cmd="ls -i /mnt/nfs/link_file | awk '{print $1}'", sudo=True)[
-                0
-            ]
-            .strip()
+            run_as_user(clients[0], f"ls -i {nfs_mount}/link_file | awk '{{print $1}}'", run_user)[0].strip()
         )
         if original_file_inode != hard_link_file_inode:
             raise OperationFailedError(

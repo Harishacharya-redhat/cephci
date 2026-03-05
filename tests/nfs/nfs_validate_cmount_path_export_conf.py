@@ -1,6 +1,11 @@
 import json
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError
@@ -27,11 +32,11 @@ def run(ceph_cluster, **kw):
     nfs_server_name = nfs_nodes[0].hostname
     fs_name = "cephfs"
     export_name = "/export_1"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     if no_clients > len(clients):
         raise ConfigError("The test requires more clients than available")
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -44,6 +49,7 @@ def run(ceph_cluster, **kw):
             fs_name,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Fetch the export info
         out = Ceph(clients[0]).nfs.export.get(nfs_name, export_name)

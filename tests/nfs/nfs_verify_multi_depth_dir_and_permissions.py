@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -19,6 +25,7 @@ def run(ceph_cluster, **kw):
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
     operation = config.get("operation")
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
         raise ConfigError("The test requires more clients than available")
@@ -46,43 +53,34 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create multi depth dirs under nfs share
+        # Create multi depth dirs under nfs share (as run_user when set)
         depth = int(config.get("dir_depth", 5))
         dirs_per_depth = int(config.get("dirs_per_depth", 2))
         dir = nfs_mount
         try:
             for i in range(depth):
                 dir = f"{dir}/test_dir{i}"
-                cmd = f"mkdir -p {dir}"
-                clients[0].exec_command(cmd=cmd, sudo=True)
-                # Make a file inside the dir
-                cmd = f"touch {dir}/test_file{i}"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                run_as_user(clients[0], f"mkdir -p {dir}", run_user)
+                run_as_user(clients[0], f"touch {dir}/test_file{i}", run_user)
                 for j in range(dirs_per_depth):
-                    cmd = f"mkdir -p {dir}/test_dir{j}"
-                    clients[0].exec_command(cmd=cmd, sudo=True)
+                    run_as_user(clients[0], f"mkdir -p {dir}/test_dir{j}", run_user)
         except Exception as e:
             raise OperationFailedError(f"Failed to create multi depth dirs {str(e)}")
 
         if operation == "default_permissions":
-            # Check 1: Try reading a non-existing file
             default_dir_permission = "drwxr-xr-x"
             default_file_permission = "-rw-r--r--"
             dir = nfs_mount
             for i in range(depth):
-                # Check default dir permission
                 dir = f"{dir}/test_dir{i}"
-                cmd = f"ls -lrt {dir}"
-                out, _ = clients[0].exec_command(cmd=cmd, sudo=True)
+                out, _ = run_as_user(clients[0], f"ls -lrt {dir}", run_user)
                 if default_dir_permission not in out:
                     raise OperationFailedError(
                         f"Dir permission is different than default {out}"
                     )
-
-                # Check default file permission
-                cmd = f"ls -lrt {dir}/test_file{i}"
-                out, _ = clients[0].exec_command(cmd=cmd, sudo=True)
+                out, _ = run_as_user(clients[0], f"ls -lrt {dir}/test_file{i}", run_user)
                 if default_file_permission not in out:
                     raise OperationFailedError(
                         f"File permission is different than default {out}"

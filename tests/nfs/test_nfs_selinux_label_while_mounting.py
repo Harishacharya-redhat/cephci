@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -33,9 +39,9 @@ def run(ceph_cluster, **kw):
     dirname = "Directory"
     num_files = 20
     num_dirs = 10
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -48,29 +54,24 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
-        # Remount the share on Client with selinux label
+        set_client_mount_ownership(clients, nfs_mount, run_user)
+
         cmd = f"umount -l {nfs_mount}"
         clients[0].exec_command(sudo=True, cmd=cmd)
 
         cmd = f"mount -t nfs -o context=system_u:object_r:nfs_t:s0 {nfs_nodes[0].ip_address}:{nfs_export}_0 {nfs_mount}"
         clients[0].exec_command(sudo=True, cmd=cmd)
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create the files on mount point
         for i in range(1, num_files + 1):
-            cmd = f"touch {nfs_mount}/{filename}_{i}"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(clients[0], f"touch {nfs_mount}/{filename}_{i}", run_user)
 
-        # Create the directories and file inside directories on mount point
         for i in range(1, num_dirs + 1):
-            cmd = f"mkdir {nfs_mount}/{dirname}_{i}"
-            clients[0].exec_command(cmd=cmd, sudo=True)
-            cmd = f"touch {nfs_mount}/{dirname}_{i}/dir{i}_{filename}"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(clients[0], f"mkdir {nfs_mount}/{dirname}_{i}", run_user)
+            run_as_user(clients[0], f"touch {nfs_mount}/{dirname}_{i}/dir{i}_{filename}", run_user)
 
-        # Check the labels of the files on mount point. It should be same as mount point
         for i in range(1, num_files + 1):
-            cmd = f"ls -Z {nfs_mount}/{filename}_{i}"
-            out = clients[0].exec_command(cmd=cmd, sudo=True)
+            out = run_as_user(clients[0], f"ls -Z {nfs_mount}/{filename}_{i}", run_user)
             if "nfs_t" in out[0]:
                 log.info(
                     f"selinux lable is set correctly for file {filename}_{i} :  {out[0]}"
@@ -80,10 +81,10 @@ def run(ceph_cluster, **kw):
                     "Selinux label is not the same as the NFS mount point"
                 )
 
-        # Check the labels of the files created inside directories. It should be same as mount point
         for i in range(1, num_dirs + 1):
-            cmd = f"ls -Z {nfs_mount}/{dirname}_{i}/dir{i}_{filename}"
-            out = clients[0].exec_command(cmd=cmd, sudo=True)
+            out = run_as_user(
+                clients[0], f"ls -Z {nfs_mount}/{dirname}_{i}/dir{i}_{filename}", run_user
+            )
             if "nfs_t" in out[0]:
                 log.info(
                     f"selinux lable is set correctly for the file dir{i}_{filename} :  {out[0]}"

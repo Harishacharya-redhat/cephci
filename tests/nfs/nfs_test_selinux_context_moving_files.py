@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -32,9 +38,9 @@ def run(ceph_cluster, **kw):
     filename = "Testfile"
     num_files = 5
     dir_name = "dir1"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -47,12 +53,11 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create 5 file on Mount point from client 1
         try:
             for i in range(1, num_files + 1):
-                cmd = f"touch {nfs_mount}/{filename}_{i}"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                run_as_user(clients[0], f"touch {nfs_mount}/{filename}_{i}", run_user)
         except Exception:
             raise OperationFailedError(f"failed to create file {filename}_{i}")
 
@@ -66,10 +71,8 @@ def run(ceph_cluster, **kw):
                 f"failed to set/get the selinux label for file {filename}_{i}"
             )
 
-        # Create directory on mount point from client 1
         try:
-            cmd = f"mkdir {nfs_mount}/{dir_name}"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(clients[0], f"mkdir {nfs_mount}/{dir_name}", run_user)
         except Exception:
             raise OperationFailedError(f"failed to create directory {dir_name} ")
 
@@ -80,19 +83,17 @@ def run(ceph_cluster, **kw):
         except Exception:
             raise OperationFailedError(f"failed to set the selinux context {dir_name} ")
 
-        # Create new files inside the directory from client 1
         try:
             for i in range(1, num_files + 1):
-                cmd = f"touch {nfs_mount}/{dir_name}/newfile_{i}"
-                clients[0].exec_command(cmd=cmd, sudo=True)
+                run_as_user(clients[0], f"touch {nfs_mount}/{dir_name}/newfile_{i}", run_user)
         except Exception:
             raise OperationFailedError(f"failed to create file newfile_{i}")
 
-        # Check the selinux label for the files created inside the directory from client 2
         try:
             for i in range(1, num_files + 1):
-                cmd = f"ls -Z {nfs_mount}/{dir_name}/newfile_{i}"
-                out = clients[1].exec_command(cmd=cmd, sudo=True)
+                out = run_as_user(
+                    clients[1], f"ls -Z {nfs_mount}/{dir_name}/newfile_{i}", run_user
+                )
                 if "httpd_sys_content_t" in out[0]:
                     log.info(f"selinux lable is set correctly: {out[0]}")
                 else:
@@ -105,18 +106,23 @@ def run(ceph_cluster, **kw):
         # Move the files created on the NFS mount to the directory from client 2
         try:
             for i in range(1, num_files + 1):
-                cmd = f"mv {nfs_mount}/{filename}_{i} {nfs_mount}/{dir_name}"
-                clients[1].exec_command(cmd=cmd, sudo=True)
+                run_as_user(
+                    clients[1],
+                    f"mv {nfs_mount}/{filename}_{i} {nfs_mount}/{dir_name}",
+                    run_user,
+                )
         except Exception:
             raise OperationFailedError(
                 f"failed to move the file inside directory: {filename}_{i}"
             )
 
-        # Check if the selinux label is preserved with move operation from client 1
         try:
             for i in range(1, num_files + 1):
-                cmd = f"ls -Z {nfs_mount}/{dir_name}/{filename}_{i}"
-                out = clients[1].exec_command(cmd=cmd, sudo=True)
+                out = run_as_user(
+                    clients[1],
+                    f"ls -Z {nfs_mount}/{dir_name}/{filename}_{i}",
+                    run_user,
+                )
                 if "public_content_t" in out[0]:
                     log.info(f"selinux lable is preserved: {out[0]}")
                 else:

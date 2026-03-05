@@ -1,6 +1,12 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -20,6 +26,7 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -48,36 +55,19 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create file in local file system
-        cmd = f"touch {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"touch {nfs_mount}/test_file", run_user)
+        run_as_user(clients[0], f"ln {nfs_mount}/test_file {nfs_mount}/hard_link_file1", run_user)
+        run_as_user(clients[0], f"ln {nfs_mount}/test_file {nfs_mount}/hard_link_file2", run_user)
+        run_as_user(clients[0], f"rm -rf {nfs_mount}/test_file", run_user)
 
-        # Create hard links
-        cmd = f"ln {nfs_mount}/test_file {nfs_mount}/hard_link_file1"
-        clients[0].exec_command(cmd=cmd, sudo=True)
-        cmd = f"ln {nfs_mount}/test_file {nfs_mount}/hard_link_file2"
-        clients[0].exec_command(cmd=cmd, sudo=True)
-
-        # Delete file with multiple hard links
-        cmd = f"rm -rf {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
-
-        # Verify hardlink remaning hardlinks files
-        hardlink_file1_inode = (
-            clients[0]
-            .exec_command(
-                cmd="ls -i /mnt/nfs/hard_link_file1 | awk '{print $1}'", sudo=True
-            )[0]
-            .strip()
-        )
-        hardlink_file2_inode = (
-            clients[0]
-            .exec_command(
-                cmd="ls -i /mnt/nfs/hard_link_file2 | awk '{print $1}'", sudo=True
-            )[0]
-            .strip()
-        )
+        hardlink_file1_inode = run_as_user(
+            clients[0], f"ls -i {nfs_mount}/hard_link_file1 | awk '{{print $1}}'", run_user
+        )[0].strip()
+        hardlink_file2_inode = run_as_user(
+            clients[0], f"ls -i {nfs_mount}/hard_link_file2 | awk '{{print $1}}'", run_user
+        )[0].strip()
         if hardlink_file1_inode != hardlink_file2_inode:
             raise OperationFailedError(
                 "hard link file not have same inode as original file"

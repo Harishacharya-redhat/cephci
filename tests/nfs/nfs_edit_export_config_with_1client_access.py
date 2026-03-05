@@ -1,6 +1,12 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, open_mandatory_v3_ports, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    open_mandatory_v3_ports,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError, OperationFailedError
@@ -42,6 +48,7 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
         raise ConfigError("The test requires more clients than available")
@@ -97,6 +104,7 @@ def run(ceph_cluster, **kw):
             vip,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Create export
         Ceph(clients[0]).nfs.export.create(

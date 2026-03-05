@@ -1,6 +1,12 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -20,6 +26,9 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
+
+    # Optional non-root user (set by nfs_create_run_user step; None = run as root)
+    run_user = kw.get("test_data", {}).get("nfs_run_user")
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -48,18 +57,18 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Create file
-        cmd = f"touch {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"touch {nfs_mount}/test_file", run_user)
 
         # Remove read and write permission for all other users
-        cmd = f"chmod 600 {nfs_mount}/test_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"chmod 600 {nfs_mount}/test_file", run_user)
 
         # Create symbolic link
-        cmd = f"ln -s {nfs_mount}/test_file {nfs_mount}/link_file"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(
+            clients[0], f"ln -s {nfs_mount}/test_file {nfs_mount}/link_file", run_user
+        )
 
         # Try accessing the file using other user "cephuser"
         try:
@@ -80,5 +89,11 @@ def run(ceph_cluster, **kw):
     finally:
         log.info("Cleaning up")
         sleep(3)
-        cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=nfs_node)
+        cleanup_cluster(
+            clients,
+            nfs_mount,
+            nfs_name,
+            nfs_export,
+            nfs_nodes=nfs_node,
+        )
         log.info("Cleaning up successfull")

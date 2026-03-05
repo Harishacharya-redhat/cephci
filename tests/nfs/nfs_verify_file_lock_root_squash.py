@@ -1,7 +1,14 @@
 from threading import Thread
 from time import sleep
 
-from nfs_operations import cleanup_cluster, enable_v3_locking, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    enable_v3_locking,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError, OperationFailedError
@@ -76,6 +83,7 @@ def run(ceph_cluster, **kw):
     nfs_squash_mount = "/mnt/nfs_squash"
     original_squash_value = '"squash": "none"'
     new_squash_value = '"squash": "rootsquash"'
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
         setup_nfs_cluster(
@@ -90,6 +98,7 @@ def run(ceph_cluster, **kw):
             fs_name,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Create export
         Ceph(clients[0]).nfs.export.create(
@@ -135,11 +144,8 @@ def run(ceph_cluster, **kw):
         if version == 3:
             enable_v3_locking(installer, nfs_name, nfs_node, nfs_server_name)
 
-        # Create file on squashed dir
-        clients[0].exec_command(
-            sudo=True,
-            cmd=f"touch {nfs_squash_mount}/sample_file",
-        )
+        # Create file on squashed dir (as run_user when set)
+        run_as_user(clients[0], f"touch {nfs_squash_mount}/sample_file", run_user)
     except Exception as e:
         log.error(f"Failed to create rootsquash dir. Error: {e}")
         cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export)

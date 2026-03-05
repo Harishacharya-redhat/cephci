@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -6,18 +12,21 @@ from utility.log import Log
 log = Log(__name__)
 
 
-def create_file(count, mount_point, filename, client):
+def create_file(count, mount_point, filename, client, run_user=None):
     log.info(f"Creating file of : {count}G")
-    cmd = f"dd if=/dev/urandom of={mount_point}/{filename} bs=1G count={count}"
-    client.exec_command(cmd=cmd, sudo=True)
+    run_as_user(
+        client,
+        f"dd if=/dev/urandom of={mount_point}/{filename} bs=1G count={count}",
+        run_user,
+    )
 
 
-def verify_disk_usage(client, mount_point, size, filename=None):
+def verify_disk_usage(client, mount_point, size, filename=None, run_user=None):
     if filename:
         cmd = f"du -sh {mount_point}/{filename}"
     else:
         cmd = f"du -sh {mount_point}"
-    out = client.exec_command(cmd=cmd, sudo=True)
+    out = run_as_user(client, cmd, run_user)
     size_str = out[0].strip().split()[0]
     numeric_part = size_str.rstrip("G")
     size_rounded = f"{int(float(numeric_part))}G"
@@ -53,9 +62,9 @@ def run(ceph_cluster, **kw):
     fs = "cephfs"
     nfs_server_name = nfs_node.hostname
     filename = "Testfile"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -68,24 +77,29 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # List of files and sizes to create and verify
         files_and_sizes = [("file1", "1G"), ("file2", "2G"), ("file3", "3G")]
 
-        # Create files and verify disk usage for each file
         for filename, size in files_and_sizes:
             create_file(
                 count=int(size[:-1]),
                 mount_point=nfs_mount,
                 filename=filename,
                 client=clients[0],
+                run_user=run_user,
             )
             verify_disk_usage(
-                client=clients[0], mount_point=nfs_mount, filename=filename, size=size
+                client=clients[0],
+                mount_point=nfs_mount,
+                filename=filename,
+                size=size,
+                run_user=run_user,
             )
 
-        # Validate the total disk usage of mount point
-        verify_disk_usage(client=clients[0], mount_point=nfs_mount, size="6G")
+        verify_disk_usage(
+            client=clients[0], mount_point=nfs_mount, size="6G", run_user=run_user
+        )
         return 0
     except Exception as e:
         log.error(f"Failed to  verify the space allocation test on NFS v4.2 : {e}")

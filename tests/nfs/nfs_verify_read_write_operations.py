@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -19,6 +25,7 @@ def run(ceph_cluster, **kw):
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
     operation = config.get("operation")
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
         raise ConfigError("The test requires more clients than available")
@@ -46,6 +53,7 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         if operation == "verify_permission":
             # Create file in nfs share
@@ -113,8 +121,7 @@ def run(ceph_cluster, **kw):
                     "Unexpected: Write on non existing file passed"
                 )
         elif operation == "mv_file":
-            cmd = f"touch {nfs_mount}/test_file"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(clients[0], f"touch {nfs_mount}/test_file", run_user)
 
             # Now modify the permission of the file to root user only
             cmd = f"chown -R root {nfs_mount}/test_file"
@@ -152,20 +159,10 @@ def run(ceph_cluster, **kw):
                 )
 
         elif operation == "mv_file_overwrite":
-            # Create two files
-            cmd = f"echo test1 > {nfs_mount}/file1"
-            clients[0].exec_command(cmd=cmd, sudo=True)
-
-            cmd = "echo test2 > /mnt/file1"
-            clients[0].exec_command(cmd=cmd, sudo=True)
-
-            # Now use mv to replace test1 with test2
-            cmd = f"mv /mnt/file1 {nfs_mount}/file1"
-            clients[0].exec_command(cmd=cmd, sudo=True)
-
-            # Verify the file1 inside nfs share has content of the moved file
-            cmd = f"cat {nfs_mount}/file1"
-            out, _ = clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(clients[0], f"echo test1 > {nfs_mount}/file1", run_user)
+            run_as_user(clients[0], "echo test2 > /tmp/file1", run_user)
+            run_as_user(clients[0], f"mv /tmp/file1 {nfs_mount}/file1", run_user)
+            out, _ = run_as_user(clients[0], f"cat {nfs_mount}/file1", run_user)
             if "test2" not in out:
                 raise OperationFailedError(
                     "Mv operation doesn't overwrite the content of existing file"

@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -30,9 +36,9 @@ def run(ceph_cluster, **kw):
     fs = "cephfs"
     nfs_server_name = nfs_node.hostname
     filename = "Testfile"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -45,22 +51,16 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create a file on mount point
-        cmd = f"touch {nfs_mount}/{filename}"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"touch {nfs_mount}/{filename}", run_user)
 
-        # Set the selinux label for file
         chcon_cmd = f"chcon -t public_content_t {nfs_mount}/{filename}"
         clients[0].exec_command(cmd=chcon_cmd, sudo=True)
 
-        # Create a file with soft link
-        cmd = f"ln -s {nfs_mount}/{filename} {nfs_mount}/{filename}_soft"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"ln -s {nfs_mount}/{filename} {nfs_mount}/{filename}_soft", run_user)
 
-        # Check the selinux label for the softlink file
-        cmd = f"ls -Z {nfs_mount}/{filename}_soft"
-        out = clients[0].exec_command(cmd=cmd, sudo=True)
+        out = run_as_user(clients[0], f"ls -Z {nfs_mount}/{filename}_soft", run_user)
         if "public_content_t" not in out[0]:
             log.info(f"selinux lable is set correctly for softlink file: {out[0]}")
         else:
@@ -68,13 +68,9 @@ def run(ceph_cluster, **kw):
                 "Selinux label is not set correctly.It should be defaut."
             )
 
-        # Create a file with hard link
-        cmd = f"ln {nfs_mount}/{filename} {nfs_mount}/{filename}_hard"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"ln {nfs_mount}/{filename} {nfs_mount}/{filename}_hard", run_user)
 
-        # Check the selinux label for the hardlink file
-        cmd = f"ls -Z {nfs_mount}/{filename}_hard"
-        out = clients[0].exec_command(cmd=cmd, sudo=True)
+        out = run_as_user(clients[0], f"ls -Z {nfs_mount}/{filename}_hard", run_user)
         if "public_content_t" in out[0]:
             log.info(f"selinux lable is set correctly for hardlink file: {out[0]}")
         else:

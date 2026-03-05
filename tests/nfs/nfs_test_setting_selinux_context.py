@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -30,9 +36,9 @@ def run(ceph_cluster, **kw):
     fs = "cephfs"
     nfs_server_name = nfs_node.hostname
     filename = "Testfile"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -45,18 +51,14 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create a file on Mount point from client 1
-        cmd = f"touch {nfs_mount}/{filename}"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"touch {nfs_mount}/{filename}", run_user)
 
-        # Set the selinux context on the file from client 1
         chcon_cmd = f"chcon -t httpd_sys_content_t {nfs_mount}/{filename}"
         clients[0].exec_command(cmd=chcon_cmd, sudo=True)
 
-        # Verify the selinux label is set on the file from client 2
-        cmd = f"ls -Z {nfs_mount}/{filename}"
-        out = clients[1].exec_command(cmd=cmd, sudo=True)
+        out = run_as_user(clients[1], f"ls -Z {nfs_mount}/{filename}", run_user)
 
         if "httpd_sys_content_t" in out[0]:
             log.info(f"selinux lable is set correctly: {out[0]}")

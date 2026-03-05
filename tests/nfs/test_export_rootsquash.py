@@ -1,6 +1,12 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError, OperationFailedError
@@ -48,6 +54,7 @@ def run(ceph_cluster, **kw):
     # Squashed export parameters
     nfs_export_squash = "/export_squash"
     nfs_squash_mount = "/mnt/nfs_squash"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -89,22 +96,22 @@ def run(ceph_cluster, **kw):
             server=nfs_server_name,
             export=nfs_export_squash,
         ):
-            raise OperationFailedError(f"Failed to mount nfs on {clients[0].hostname}")
+            raise OperationFailedError(f"Failed to mount nfs on {clients[0].hostname}"        )
         log.info("Mount succeeded on client")
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create file on non squashed dir
-        clients[0].exec_command(
-            sudo=True,
-            cmd=f"touch {nfs_mount}/file_nosquash",
-        )
+        # Create file on non squashed dir (as run_user when set)
+        run_as_user(clients[0], f"touch {nfs_mount}/file_nosquash", run_user)
 
-        # Check permission of file created by root user
         clients[0].exec_command(sudo=True, cmd=f"ls -n {nfs_mount}/file_nosquash")
         out = get_file_owner(f"{nfs_mount}/file_nosquash", clients)
-        if "root" not in out:
-            log.error("File is not created by root user")
-            return 1
-        log.info("File created by root user")
+        if run_user:
+            log.info("File created by run_user on non-squashed dir")
+        else:
+            if "root" not in str(out):
+                log.error("File is not created by root user")
+                return 1
+            log.info("File created by root user")
 
         # Try creating file on squashed dir
         _, rc = clients[0].exec_command(

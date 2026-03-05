@@ -1,4 +1,12 @@
-from nfs_operations import cleanup_cluster, getfattr, setfattr, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    getfattr,
+    run_as_user,
+    set_client_mount_ownership,
+    setfattr,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError
 from utility.log import Log
@@ -37,6 +45,7 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.2")
     no_clients = int(config.get("clients", "2"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
         raise ConfigError("The test requires more clients than available")
@@ -65,10 +74,9 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create a file on Mount point
-        cmd = f"touch {nfs_mount}/{filename}"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"touch {nfs_mount}/{filename}", run_user)
 
         # Set the extended attribute of the file
         setfattr(
@@ -83,18 +91,18 @@ def run(ceph_cluster, **kw):
 
         # Perform mv operation and validate the extended attribute
         move_filename = "Testfile_mv"
-        cmd = f"mv {nfs_mount}/{filename} {nfs_mount}/{move_filename}"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[0], f"mv {nfs_mount}/{filename} {nfs_mount}/{move_filename}", run_user)
 
         # Fetch the extended attribute of the file
         fetch_xattr(client=clients[0], file_path=f"{nfs_mount}/{move_filename}")
 
         # Perform cp operation and validate the extended attribute
         copy_filename = "Testfile_cp"
-        cmd = (
-            f"cp --preserve=all {nfs_mount}/{move_filename} {nfs_mount}/{copy_filename}"
+        run_as_user(
+            clients[0],
+            f"cp --preserve=all {nfs_mount}/{move_filename} {nfs_mount}/{copy_filename}",
+            run_user,
         )
-        clients[0].exec_command(cmd=cmd, sudo=True)
 
         # Fetch the extended attribute of the file
         fetch_xattr(client=clients[0], file_path=f"{nfs_mount}/{copy_filename}")

@@ -1,7 +1,12 @@
 from threading import Thread
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError
 from cli.utilities.utils import (
@@ -33,6 +38,7 @@ def run(ceph_cluster, **kw):
     Thread_operations = []
     permissions = "+rwx"
     user = "cephuser"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -61,6 +67,7 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Create oprtaions on each client
         for client, operation in operations.items():

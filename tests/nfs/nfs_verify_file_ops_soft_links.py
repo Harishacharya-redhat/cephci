@@ -1,6 +1,12 @@
 from threading import Thread
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -8,35 +14,35 @@ from utility.log import Log
 log = Log(__name__)
 
 
-def create_files(client, mount_point, file_count):
+def create_files(client, mount_point, file_count, run_user=None):
     for i in range(1, file_count + 1):
         try:
-            client.exec_command(
-                sudo=True,
-                cmd=f"dd if=/dev/urandom of={mount_point}/file{i} bs=1 count=1",
+            run_as_user(
+                client,
+                f"dd if=/dev/urandom of={mount_point}/file{i} bs=1 count=1",
+                run_user,
             )
         except Exception:
             raise OperationFailedError(f"failed to create file file{i}")
 
 
-def create_soft_link(client, mount_point, file_count):
+def create_soft_link(client, mount_point, file_count, run_user=None):
     for i in range(1, file_count + 1):
         try:
-            client.exec_command(
-                sudo=True, cmd=f"ln -s {mount_point}/file{i} {mount_point}/link_file{i}"
+            run_as_user(
+                client,
+                f"ln -s {mount_point}/file{i} {mount_point}/link_file{i}",
+                run_user,
             )
         except Exception:
             raise OperationFailedError(f"failed to create softlink file{i}")
 
 
-def perform_lookups(client, mount_point, num_files):
+def perform_lookups(client, mount_point, num_files, run_user=None):
     for _ in range(1, num_files):
         try:
             log.info(
-                client.exec_command(
-                    sudo=True,
-                    cmd=f"ls -laRt {mount_point}/",
-                )
+                run_as_user(client, f"ls -laRt {mount_point}/", run_user)
             )
         except FileNotFoundError as e:
             error_message = str(e)
@@ -60,6 +66,7 @@ def run(ceph_cluster, **kw):
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
     file_count = int(config.get("file_count", "10"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -88,12 +95,12 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create oprtaions on each client
         operations = [
-            Thread(target=create_files, args=(clients[0], nfs_mount, file_count)),
-            Thread(target=create_soft_link, args=(clients[1], nfs_mount, file_count)),
-            Thread(target=perform_lookups, args=(clients[1], nfs_mount, file_count)),
+            Thread(target=create_files, args=(clients[0], nfs_mount, file_count, run_user)),
+            Thread(target=create_soft_link, args=(clients[1], nfs_mount, file_count, run_user)),
+            Thread(target=perform_lookups, args=(clients[1], nfs_mount, file_count, run_user)),
         ]
 
         # start opertaion on each client

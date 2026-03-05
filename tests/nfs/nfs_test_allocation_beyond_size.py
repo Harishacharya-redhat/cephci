@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -30,9 +36,9 @@ def run(ceph_cluster, **kw):
     fs = "cephfs"
     nfs_server_name = nfs_node.hostname
     filename = "Testfile"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -45,18 +51,20 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create a file
-        cmd = f"dd if=/dev/urandom of={nfs_mount}/{filename} bs=1G count=1"
-        clients[0].exec_command(cmd=cmd, sudo=True)
+        run_as_user(
+            clients[0],
+            f"dd if=/dev/urandom of={nfs_mount}/{filename} bs=1G count=1",
+            run_user,
+        )
+        run_as_user(
+            clients[0],
+            f"dd if=/dev/urandom of={nfs_mount}/{filename} bs=1G count=1 seek=9 conv=notrunc",
+            run_user,
+        )
 
-        # Simulate allocation beyond EOF
-        cmd = f"dd if=/dev/urandom of={nfs_mount}/{filename} bs=1G count=1 seek=9 conv=notrunc"
-        clients[0].exec_command(cmd=cmd, sudo=True)
-
-        # Verify the file size is allocated correctly
-        cmd = f"du -sh {nfs_mount}/{filename}"
-        out = clients[0].exec_command(cmd=cmd, sudo=True)
+        out = run_as_user(clients[0], f"du -sh {nfs_mount}/{filename}", run_user)
         file_size = out[0].strip().split()[0]
         if file_size == "10G":
             log.info(f"File created with correct space: {file_size}")

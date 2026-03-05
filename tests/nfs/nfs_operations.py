@@ -25,27 +25,93 @@ ceph_cluster_obj = None
 setup_start_time = None
 
 
+def run_as_user(client, cmd, run_user=None, **kwargs):
+    """
+    Execute *cmd* on *client* as *run_user* when provided, otherwise as root.
+
+    When run_user is set the command is wrapped in::
+
+        sudo su - <run_user> -c '<cmd>'
+
+    so that the user's environment (PATH, umask, etc.) is used.  All
+    administrative / mounting / Ceph-CLI commands should still call
+    ``client.exec_command(sudo=True, …)`` directly; only mount-point
+    I/O operations need to go through this helper.
+
+    Args:
+        client:    Ceph node object with exec_command().
+        cmd:       Shell command to execute.
+        run_user:  OS username to run as, or None for root.
+        **kwargs:  Extra kwargs forwarded to exec_command().
+
+    Returns:
+        Same return value as exec_command().
+    """
+    if run_user:
+        log.info(f"Executing command as {run_user}: {cmd}")
+        # Escape single quotes inside cmd so the outer '…' wrapper is safe.
+        escaped_cmd = cmd.replace("'", "'\\''")  # ' -> '\''  (POSIX quoting)
+        full_cmd = f"su - {run_user} -c '{escaped_cmd}'"
+        return client.exec_command(sudo=True, cmd=full_cmd, **kwargs)
+
+    log.info(f"Executing command as root: {cmd}")
+    return client.exec_command(sudo=True, cmd=cmd, **kwargs)
+
+
+def get_nfs_run_user(config, test_data=None):
+    """
+    Return the optional non-root user for after-mount client I/O.
+    Cluster and mount stay root; only client ops on the NFS mount use this user.
+    """
+    config = config or {}
+    test_data = test_data or {}
+    return config.get("nfs_run_user") or config.get("user") or test_data.get("nfs_run_user")
+
+
+def set_client_mount_ownership(clients, nfs_mount, run_user):
+    """
+    After NFS mount (as root), chown the mount root to run_user so they can create files.
+    Call as root. No-op if run_user is None.
+    """
+    if not run_user:
+        return
+    for client in clients:
+        client.exec_command(sudo=True, cmd=f"chown {run_user}:{run_user} {nfs_mount}")
+        log.info("Transferred ownership of %s to %s on %s", nfs_mount, run_user, client.hostname)
+
+
 class NfsCleanupFailed(Exception):
     pass
 
 
 def setup_nfs_cluster(
-    clients,
-    nfs_server,
-    port,
-    version,
-    nfs_name,
-    nfs_mount,
-    fs_name,
-    export,
-    fs,
-    ha=False,
-    vip=None,
-    ceph_cluster=None,
-    active_standby=False,
-    round_robin=False,
-    single_export=False,
+        clients,
+        nfs_server,
+        port,
+        version,
+        nfs_name,
+        nfs_mount,
+        fs_name,
+        export,
+        fs,
+        ha=False,
+        vip=None,
+        ceph_cluster=None,
+        active_standby=False,
+        round_robin=False,
+        single_export=False,
+        run_user=None,
 ):
+    """
+    Set up a complete NFS cluster: enable NFS module, create cluster, create
+    exports, and mount on all clients.
+
+    Args:
+        run_user (str | None): When set, the NFS mount directory is
+            ``chown``-ed to this user after mounting so that all subsequent
+            I/O operations on the mount can be performed as that user.  If
+            *None* (default) the mount remains owned by root (current behaviour).
+    """
     # Get ceph cluter object and setup start time
     global ceph_cluster_obj
     global setup_start_time
@@ -91,15 +157,23 @@ def setup_nfs_cluster(
 
     create_kwargs = {"nfs_version": nfs_version}
 
-    Ceph(clients[0]).nfs.cluster.create(
-        name=nfs_name,
-        nfs_server=nfs_server,
-        ha=ha,
-        vip=vip,
-        active_standby=active_standby,
-        nfs_nodes_obj=nfs_nodes,
-        **create_kwargs,
-    )
+    if run_user:
+        cluster_create_cmd = f"ceph nfs cluster create {nfs_name} '{nfs_server}'"
+        if ha:
+            cluster_create_cmd += f" --ingress --virtual-ip {vip}"
+        if nfs_version == 3 and "--enable-nfsv3" not in cluster_create_cmd:
+            cluster_create_cmd += " --enable-nfsv3"
+        run_as_user(clients[0], cluster_create_cmd, run_user=run_user)
+    else:
+        Ceph(clients[0]).nfs.cluster.create(
+            name=nfs_name,
+            nfs_server=nfs_server,
+            ha=ha,
+            vip=vip,
+            active_standby=active_standby,
+            nfs_nodes_obj=nfs_nodes,
+            **create_kwargs,
+        )
     sleep(3)
 
     # Step 3: Perform Export on clients
@@ -112,9 +186,25 @@ def setup_nfs_cluster(
     i = 0
     for client in loop_clients:
         export_name = "{export}_{i}".format(export=export, i=i)
-        Ceph(client).nfs.export.create(
-            fs_name=fs_name, nfs_name=nfs_name, nfs_export=export_name, fs=fs
-        )
+
+        if run_user:
+            # Check for subvolumegroup ganeshagroup
+            out, _ = run_as_user(client, "ceph fs subvolumegroup ls cephfs", run_user=run_user)
+            if "ganeshagroup" not in out:
+                run_as_user(client, "ceph fs subvolumegroup create cephfs ganeshagroup", run_user=run_user)
+            subvol_name = export_name.replace("/", "")
+            run_as_user(client,
+                        f"ceph fs subvolume create cephfs {subvol_name} --group_name ganeshagroup --namespace-isolated",
+                        run_user=run_user)
+            out, _ = run_as_user(client, f"ceph fs subvolume getpath cephfs {subvol_name} --group_name ganeshagroup",
+                                 run_user=run_user)
+            path = out.strip()
+            run_as_user(client, f"ceph nfs export create cephfs {nfs_name} {export_name} {fs_name} --path={path}",
+                        run_user=run_user)
+        else:
+            Ceph(client).nfs.export.create(
+                fs_name=fs_name, nfs_name=nfs_name, nfs_export=export_name, fs=fs
+            )
         i += 1
         all_exports = Ceph(client).nfs.export.ls(nfs_name)
         if export_name not in all_exports:
@@ -168,11 +258,21 @@ def setup_nfs_cluster(
 
             client.create_dirs(dir_path=nfs_mount, sudo=True)
             if mount_retry(
-                client, nfs_mount, version, port, current_server, current_export
+                    client, nfs_mount, version, port, current_server, current_export, run_user
             ):
                 log.info(
                     "Mount succeeded on %s using server %s and export %s"
                     % (client.hostname, current_server, current_export)
+                )
+            # Allow run_user to own the mount point so IO can be done as that user.
+            if run_user:
+                client.exec_command(
+                    sudo=True,
+                    cmd=f"chown {run_user}:{run_user} {nfs_mount}",
+                )
+                log.info(
+                    "Transferred ownership of %s to %s on %s"
+                    % (nfs_mount, run_user, client.hostname)
                 )
             i += 1
             server_idx += 1
@@ -209,7 +309,7 @@ def setup_nfs_cluster(
     Enable_nfs_coredump(nfs_nodes)
 
 
-def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=None):
+def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=None, run_user=None):
     """
     Clean up the cluster post nfs operation
     Steps:
@@ -242,6 +342,15 @@ def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=None):
         # Clear the nfs_mount, at times rm operation can fail
         # as the dir is not empty, this being an expected behaviour,
         # the solution is to repeat the rm operation.
+        # When run_user is set we first try to clean up as that user so that
+        # permission-denied errors on user-owned files are avoided.
+        if run_user:
+            run_as_user(
+                client,
+                f"rm -rf {nfs_mount}/*",
+                run_user=run_user,
+                check_ec=False,
+            )
         if not mount_cleanup_retry(client, nfs_mount):
             raise NfsCleanupFailed(
                 "Failed to cleanup nfs mount dir even after multiple iterations. Timed out!"
@@ -249,16 +358,28 @@ def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=None):
 
         log.info("Unmounting nfs-ganesha mount on client:")
         sleep(3)
-        if Unmount(client).unmount(nfs_mount):
-            raise OperationFailedError(f"Failed to unmount nfs on {client.hostname}")
+        if run_user:
+            out, err = run_as_user(client, f"sudo umount {nfs_mount}", run_user=run_user, check_ec=False)
+            if err:
+                raise OperationFailedError(f"Failed to unmount nfs on {client.hostname} as {run_user}: {err}")
+        else:
+            if Unmount(client).unmount(nfs_mount):
+                raise OperationFailedError(f"Failed to unmount nfs on {client.hostname}")
         log.info("Removing nfs-ganesha mount dir on client:")
         client.exec_command(sudo=True, cmd=f"rm -rf  {nfs_mount}")
         sleep(3)
 
     # Delete all exports
     for i in range(len(clients)):
-        Ceph(clients[0]).nfs.export.delete(nfs_name, f"{nfs_export}_{i}")
-    Ceph(clients[0]).nfs.cluster.delete(nfs_name)
+        if run_user:
+            run_as_user(clients[0], f"ceph nfs export delete {nfs_name} {nfs_export}_{i}", run_user=run_user)
+        else:
+            Ceph(clients[0]).nfs.export.delete(nfs_name, f"{nfs_export}_{i}")
+
+    if run_user:
+        run_as_user(clients[0], f"ceph nfs cluster delete {nfs_name}", run_user=run_user)
+    else:
+        Ceph(clients[0]).nfs.cluster.delete(nfs_name)
     sleep(30)
     check_nfs_daemons_removed(clients[0])
 
@@ -280,21 +401,22 @@ def cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=None):
 
 
 def setup_custom_nfs_cluster_multi_export_client(
-    clients,
-    nfs_server,
-    port,
-    version,
-    nfs_name,
-    fs_name,
-    fs,
-    nfs_mount,
-    nfs_export,
-    ha=False,
-    vip=None,
-    export_num=None,
-    ceph_cluster=None,
-    active_standby=None,
-    **kwargs,
+        clients,
+        nfs_server,
+        port,
+        version,
+        nfs_name,
+        fs_name,
+        fs,
+        nfs_mount,
+        nfs_export,
+        ha=False,
+        vip=None,
+        export_num=None,
+        ceph_cluster=None,
+        active_standby=None,
+        run_user=None,
+        **kwargs,
 ):
     # Get ceph cluter object and setup start time
     global ceph_cluster_obj
@@ -330,15 +452,23 @@ def setup_custom_nfs_cluster_multi_export_client(
     if "in-file" in kwargs:
         create_kwargs["in-file"] = kwargs["in-file"]
 
-    Ceph(clients[0]).nfs.cluster.create(
-        name=nfs_name,
-        nfs_server=nfs_server,
-        ha=ha,
-        vip=vip,
-        active_standby=active_standby,
-        nfs_nodes_obj=nfs_nodes,
-        **create_kwargs,
-    )
+    if run_user:
+        cluster_create_cmd = f"ceph nfs cluster create {nfs_name} '{nfs_server}'"
+        if ha:
+            cluster_create_cmd += f" --ingress --virtual-ip {vip}"
+        if nfs_version == 3 and "--enable-nfsv3" not in cluster_create_cmd:
+            cluster_create_cmd += " --enable-nfsv3"
+        run_as_user(clients[0], cluster_create_cmd, run_user=run_user)
+    else:
+        Ceph(clients[0]).nfs.cluster.create(
+            name=nfs_name,
+            nfs_server=nfs_server,
+            ha=ha,
+            vip=vip,
+            active_standby=active_standby,
+            nfs_nodes_obj=nfs_nodes,
+            **create_kwargs,
+        )
     sleep(3)
 
     # Step 3: Perform Export on clients
@@ -349,7 +479,7 @@ def setup_custom_nfs_cluster_multi_export_client(
     # Create the export and mount points for each client
     for client_num in range(len(clients)):
         for export_num in range(
-            len(client_export_mount_dict[clients[client_num]]["export"])
+                len(client_export_mount_dict[clients[client_num]]["export"])
         ):
             export_name = client_export_mount_dict[clients[client_num]]["export"][
                 export_num
@@ -357,13 +487,31 @@ def setup_custom_nfs_cluster_multi_export_client(
             mount_name = client_export_mount_dict[clients[client_num]]["mount"][
                 export_num
             ]
-            Ceph(clients[client_num]).nfs.export.create(
-                fs_name=fs_name,
-                nfs_name=nfs_name,
-                nfs_export=export_name,
-                fs=fs,
-                **({"enctag": kwargs["enctag"]} if "enctag" in kwargs else {}),
-            )
+            if run_user:
+                # Check for subvolumegroup ganeshagroup
+                out, _ = run_as_user(clients[client_num], "ceph fs subvolumegroup ls cephfs", run_user=run_user)
+                if "ganeshagroup" not in out:
+                    run_as_user(clients[client_num], "ceph fs subvolumegroup create cephfs ganeshagroup",
+                                run_user=run_user)
+                subvol_name = export_name.replace("/", "")
+                run_as_user(clients[client_num],
+                            f"ceph fs subvolume create cephfs {subvol_name} --group_name ganeshagroup --namespace-isolated",
+                            run_user=run_user)
+                out, _ = run_as_user(clients[client_num],
+                                     f"ceph fs subvolume getpath cephfs {subvol_name} --group_name ganeshagroup",
+                                     run_user=run_user)
+                path = out.strip()
+                run_as_user(clients[client_num],
+                            f"ceph nfs export create cephfs {nfs_name} {export_name} {fs_name} --path={path}",
+                            run_user=run_user)
+            else:
+                Ceph(clients[client_num]).nfs.export.create(
+                    fs_name=fs_name,
+                    nfs_name=nfs_name,
+                    nfs_export=export_name,
+                    fs=fs,
+                    **({"enctag": kwargs["enctag"]} if "enctag" in kwargs else {}),
+                )
             all_exports = Ceph(clients[0]).nfs.export.ls(nfs_name)
             if export_name not in all_exports:
                 raise OperationFailedError(
@@ -380,12 +528,14 @@ def setup_custom_nfs_cluster_multi_export_client(
                 nfs_server = vip.split("/")[0]  # Remove the port
             for version, clients in mount_versions.items():
                 clients[client_num].create_dirs(dir_path=mount_name, sudo=True)
-                if Mount(clients[client_num]).nfs(
-                    mount=mount_name,
-                    version=version,
-                    port=port,
-                    server=nfs_server,
-                    export=export_name,
+                if mount_retry(
+                        clients[client_num],
+                        mount_name,
+                        version,
+                        port,
+                        nfs_server,
+                        export_name,
+                        run_user,
                 ):
                     raise OperationFailedError(
                         "Failed to mount nfs on %s" % clients[client_num].hostname
@@ -466,7 +616,7 @@ def exports_mounts_perclient(clients, nfs_export, nfs_mount, export_num) -> dict
 
 
 def cleanup_custom_nfs_cluster_multi_export_client(
-    clients, nfs_mount, nfs_name, nfs_export, export_num, nfs_nodes=None
+        clients, nfs_mount, nfs_name, nfs_export, export_num, nfs_nodes=None, run_user=None
 ):
     """
     Clean up the cluster post nfs operation
@@ -506,7 +656,7 @@ def cleanup_custom_nfs_cluster_multi_export_client(
 
     for client_num in range(len(clients)):
         for export_num in range(
-            len(client_export_mount_dict[clients[client_num]]["export"])
+                len(client_export_mount_dict[clients[client_num]]["export"])
         ):
             export_name = client_export_mount_dict[clients[client_num]]["export"][
                 export_num
@@ -515,6 +665,13 @@ def cleanup_custom_nfs_cluster_multi_export_client(
                 export_num
             ]
             client = list(client_export_mount_dict.keys())[client_num]
+            if run_user:
+                run_as_user(
+                    client,
+                    f"rm -rf {mount_name}/*",
+                    run_user=run_user,
+                    check_ec=False,
+                )
             # Clear the nfs_mount, at times rm operation can fail
             # as the dir is not empty, this being an expected behaviour,
             # the solution is to repeat the rm operation.
@@ -525,18 +682,31 @@ def cleanup_custom_nfs_cluster_multi_export_client(
 
             log.info("Unmounting nfs-ganesha mount on client:")
             sleep(3)
-            if Unmount(client).unmount(mount_name):
-                raise OperationFailedError(
-                    f"Failed to unmount nfs on {client.hostname}"
-                )
+            if run_user:
+                out, err = run_as_user(client, f"sudo umount {mount_name}", run_user=run_user, check_ec=False)
+                if err:
+                    raise OperationFailedError(
+                        f"Failed to unmount nfs on {client.hostname} as {run_user}: {err}"
+                    )
+            else:
+                if Unmount(client).unmount(mount_name):
+                    raise OperationFailedError(
+                        f"Failed to unmount nfs on {client.hostname}"
+                    )
             log.info("Removing nfs-ganesha mount dir on client:")
             client.exec_command(sudo=True, cmd=f"rm -rf  {mount_name}")
             sleep(3)
 
             # Delete all exports
-            Ceph(clients[0]).nfs.export.delete(nfs_name, export_name)
+            if run_user:
+                run_as_user(clients[0], f"ceph nfs export delete {nfs_name} {export_name}", run_user=run_user)
+            else:
+                Ceph(clients[0]).nfs.export.delete(nfs_name, export_name)
 
-    Ceph(clients[0]).nfs.cluster.delete(nfs_name)
+    if run_user:
+        run_as_user(clients[0], f"ceph nfs cluster delete {nfs_name}", run_user=run_user)
+    else:
+        Ceph(clients[0]).nfs.cluster.delete(nfs_name)
     sleep(30)
     check_nfs_daemons_removed(clients[0])
 
@@ -567,7 +737,7 @@ def _get_client_specific_mount_versions(versions, clients):
     for entry in versions:
         ver = list(entry.keys())[0]
         count = list(entry.values())[0]
-        version_dict[ver] = clients[ctr : ctr + int(count)]
+        version_dict[ver] = clients[ctr: ctr + int(count)]
         ctr = ctr + int(count)
     return version_dict
 
@@ -829,7 +999,7 @@ def check_nfs_daemons_removed_retry(client):
 
 
 def create_nfs_via_file_and_verify(
-    installer_node, nfs_objects, timeout, nfs_nodes=None
+        installer_node, nfs_objects, timeout, nfs_nodes=None
 ):
     """
     Create a temporary YAML file with NFS Ganesha configuration.
@@ -997,15 +1167,22 @@ def open_mandatory_v3_ports(nfs_node, ports_to_open):
 
 
 @retry(OperationFailedError, tries=4, delay=5, backoff=2)
-def mount_retry(client, mount_name, version, port, nfs_server, export_name):
-    if Mount(client).nfs(
-        mount=mount_name,
-        version=version,
-        port=port,
-        server=nfs_server,
-        export=export_name,
-    ):
-        raise OperationFailedError("Failed to mount nfs on %s" % {export_name.hostname})
+def mount_retry(client, mount_name, version, port, nfs_server, export_name, run_user=None):
+    if run_user:
+        # User has passwordless sudo access to /usr/bin/mount via sudoers.d
+        mount_cmd = f"sudo mount -t nfs -o port={port},nfsvers={version} {nfs_server}:{export_name} {mount_name}"
+        out, err = run_as_user(client, mount_cmd, run_user=run_user, check_ec=False)
+        if err:
+            raise OperationFailedError("Failed to mount nfs on %s" % client.hostname)
+    else:
+        if Mount(client).nfs(
+                mount=mount_name,
+                version=version,
+                port=port,
+                server=nfs_server,
+                export=export_name,
+        ):
+            raise OperationFailedError("Failed to mount nfs on %s" % client.hostname)
     return True
 
 
@@ -1027,7 +1204,7 @@ def fuse_mount_retry(client, mount, **kwargs):
         **kwargs: Additional arguments for the Mount method.
     """
     if FuseMount(client).mount(
-        client_hostname=client.hostname, mount_point=mount, **kwargs
+            client_hostname=client.hostname, mount_point=mount, **kwargs
     ):
         raise OperationFailedError("Failed to fuse mount nfs on %s" % client.hostname)
     return True
@@ -1075,7 +1252,7 @@ def verify_nfs_ganesha_service(node, timeout):
 
 
 def create_multiple_nfs_instance_via_spec_file(
-    spec, replication_number, installer, timeout=300
+        spec, replication_number, installer, timeout=300
 ):
     """
     Create multiple NFS Ganesha service instances from a base spec file.
@@ -1154,7 +1331,7 @@ def create_multiple_nfs_instance_via_spec_file(
 
 
 def dynamic_cleanup_common_names(
-    clients, mounts_common_name, clusters=None, mount_point="/mnt/", group_name=None
+        clients, mounts_common_name, clusters=None, mount_point="/mnt/", group_name=None
 ):
     """
     Dynamically clean up NFS resources by common name.

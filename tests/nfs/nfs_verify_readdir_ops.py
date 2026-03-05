@@ -1,6 +1,12 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError
 from cli.io.io import linux_untar
@@ -21,6 +27,7 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
@@ -49,38 +56,21 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Linux untar on client 1
+        # Linux untar on client 1 (writes to nfs_mount; root or run_user can write after chown)
         io = linux_untar(clients[0], nfs_mount)
 
-        # Test 1: Perform Linux untar from 1 client and do readir operation from other client (ls -lart)
-        cmd = f"ls -lart {nfs_mount}"
-        clients[1].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[1], f"ls -lart {nfs_mount}", run_user)
+        run_as_user(clients[2], f"du -sh {nfs_mount}", run_user)
+        run_as_user(clients[3], f"find {nfs_mount} -name *.txt", run_user)
 
-        # Test 2: Perform Linux untar from 1 client and do readir operation from other client (du -sh)
-        cmd = f"du -sh {nfs_mount}"
-        clients[2].exec_command(cmd=cmd, sudo=True)
-
-        # Perform Linux untar from 1 client and do readir operation from other client (finds)
-        cmd = f"find {nfs_mount} -name *.txt"
-        clients[3].exec_command(cmd=cmd, sudo=True)
-
-        # Wait for io to complete on all clients
         for th in io:
             th.join()
 
-        # Repeat the tests post untar completes
-        # Test 1: Perform Linux untar from 1 client and do readir operation from other client (ls -lart)
-        cmd = f"ls -lart {nfs_mount}"
-        clients[1].exec_command(cmd=cmd, sudo=True)
-
-        # Test 2: Perform Linux untar from 1 client and do readir operation from other client (du -sh)
-        cmd = f"du -sh {nfs_mount}"
-        clients[2].exec_command(cmd=cmd, sudo=True)
-
-        # Perform Linux untar from 1 client and do readir operation from other client (finds)
-        cmd = f"find {nfs_mount} -name *.txt"
-        clients[3].exec_command(cmd=cmd, sudo=True)
+        run_as_user(clients[1], f"ls -lart {nfs_mount}", run_user)
+        run_as_user(clients[2], f"du -sh {nfs_mount}", run_user)
+        run_as_user(clients[3], f"find {nfs_mount} -name *.txt", run_user)
         return 0
 
     except Exception as e:

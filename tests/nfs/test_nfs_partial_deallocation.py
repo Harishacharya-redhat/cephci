@@ -1,4 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.exceptions import ConfigError, OperationFailedError
 from utility.log import Log
@@ -30,9 +36,9 @@ def run(ceph_cluster, **kw):
     fs = "cephfs"
     nfs_server_name = nfs_node.hostname
     filename = "Testfile"
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
 
     try:
-        # Setup nfs cluster
         setup_nfs_cluster(
             clients,
             nfs_server_name,
@@ -45,15 +51,18 @@ def run(ceph_cluster, **kw):
             fs,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
-        # Create a file
         for i in range(1, 6):
-            cmd = f"dd if=/dev/urandom of={nfs_mount}/{filename}{i} bs=1G count=3"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(
+                clients[0],
+                f"dd if=/dev/urandom of={nfs_mount}/{filename}{i} bs=1G count=3",
+                run_user,
+            )
 
-            # Verify the file's size are allocated correctly
-            cmd = f"du -sh {nfs_mount}/{filename}{i}"
-            out = clients[0].exec_command(cmd=cmd, sudo=True)
+            out = run_as_user(
+                clients[0], f"du -sh {nfs_mount}/{filename}{i}", run_user
+            )
             print(out)
             file_size = out[0].strip().split()[0]
             print(file_size)
@@ -64,14 +73,14 @@ def run(ceph_cluster, **kw):
                     f"File {filename}{i} took incorrect space utilization. Expected: 3.0G , Actual: {file_size}"
                 )
 
-        # Truncate all the files to 1GB
         for i in range(1, 6):
-            cmd = f"truncate -s 1G {nfs_mount}/{filename}{i}"
-            clients[0].exec_command(cmd=cmd, sudo=True)
+            run_as_user(
+                clients[0], f"truncate -s 1G {nfs_mount}/{filename}{i}", run_user
+            )
 
-            # Verify all files are truncated  correctly
-            cmd = f"du -sh {nfs_mount}/{filename}{i}"
-            out = clients[0].exec_command(cmd=cmd, sudo=True)
+            out = run_as_user(
+                clients[0], f"du -sh {nfs_mount}/{filename}{i}", run_user
+            )
             print(out)
             file_size = out[0].strip().split()[0]
             print(file_size)

@@ -1,6 +1,13 @@
 from time import sleep
 
-from nfs_operations import cleanup_cluster, open_mandatory_v3_ports, setup_nfs_cluster
+from nfs_operations import (
+    cleanup_cluster,
+    get_nfs_run_user,
+    open_mandatory_v3_ports,
+    run_as_user,
+    set_client_mount_ownership,
+    setup_nfs_cluster,
+)
 
 from cli.ceph.ceph import Ceph
 from cli.exceptions import ConfigError, OperationFailedError
@@ -36,6 +43,7 @@ def run(ceph_cluster, **kw):
     port = config.get("port", "2049")
     version = config.get("nfs_version", "4.0")
     no_clients = int(config.get("clients", "2"))
+    run_user = get_nfs_run_user(config, kw.get("test_data"))
     # If the setup doesn't have required number of clients, exit.
     if no_clients > len(clients):
         raise ConfigError("The test requires more clients than available")
@@ -68,6 +76,7 @@ def run(ceph_cluster, **kw):
             fs_name,
             ceph_cluster=ceph_cluster,
         )
+        set_client_mount_ownership(clients, nfs_mount, run_user)
 
         # Create export
         Ceph(clients[0]).nfs.export.create(
@@ -106,10 +115,10 @@ def run(ceph_cluster, **kw):
             raise OperationFailedError(f"Failed to mount nfs on {clients[0].hostname}")
         log.info("Mount succeeded on client")
 
-        # Test writes on Readonly export
+        # Test writes on Readonly export (expect fail)
         sleep(3)
-        _, rc = clients[0].exec_command(
-            sudo=True, cmd=f"touch {nfs_readonly_mount}/file_ro", check_ec=False
+        _, rc = run_as_user(
+            clients[0], f"touch {nfs_readonly_mount}/file_ro", run_user, check_ec=False
         )
         # Ignore the "Read-only file system" error and consider it as a successful execution
         if "touch: cannot touch" in str(rc) and "Read-only file system" in str(rc):
@@ -118,12 +127,9 @@ def run(ceph_cluster, **kw):
             log.error("Created file on RO export")
             return 1
 
-        # Test writes on RW export
-        if clients[0].exec_command(sudo=True, cmd=f"touch {nfs_mount}/file_rw"):
-            log.info("Successfully created file on RW export")
-        else:
-            log.error("failed to create file on RW export")
-            return 1
+        # Test writes on RW export (as run_user when set)
+        run_as_user(clients[0], f"touch {nfs_mount}/file_rw", run_user)
+        log.info("Successfully created file on RW export")
         return 0
     except Exception as e:
         log.error(f"Error : {e}")
