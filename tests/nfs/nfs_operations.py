@@ -1,7 +1,7 @@
 import json
 import os
 import re
-import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Thread
@@ -14,7 +14,7 @@ from ceph.waiter import WaitUntil
 from cli.ceph.ceph import Ceph
 from cli.cephadm.cephadm import CephAdm
 from cli.exceptions import OperationFailedError
-from cli.utilities.filesys import FuseMount, Mount, Unmount
+from cli.utilities.filesys import FuseMount, Mount, MountFailedError, Unmount
 from cli.utilities.utils import check_coredump_generated, get_ip_from_node, reboot_node
 from utility.log import Log
 from utility.retry import retry
@@ -775,7 +775,7 @@ spec:
 
     # Open the NLM port in firewall
     log.info("Opening NLM (nlockmgr) port in firewall")
-    ports_to_open = ["nlockmgr", "mountd"]
+    ports_to_open = ["nlockmgr"]
     open_mandatory_v3_ports(nfs_node, ports_to_open)
     log.info("NFSv3 locking (NLM) enabled successfully")
 
@@ -850,46 +850,122 @@ def check_nfs_daemons_removed_retry(client):
     return True
 
 
+def _orch_ps_json_stdout(installer_node, cmd):
+    """Return stripped stdout from ``ceph orch ps`` as a string (handles str or file-like)."""
+    raw, _ = installer_node.exec_command(
+        sudo=True, cmd=cmd, timeout=120, check_ec=False
+    )
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw.strip()
+    return raw.read().decode().strip()
+
+
+def _resolve_nfs_nodes_for_service_ids(installer_node, nfs_objects, cluster_nodes):
+    """
+    Map ``ceph orch ps`` hostnames for ``nfs.<service_id>`` to Ceph test node objects.
+
+    Used when ``create_nfs_via_file_and_verify`` is called without an explicit ``nfs_nodes``
+    list (for example multi-instance spec apply from a single installer).
+    """
+    if not cluster_nodes:
+        return []
+    service_ids = [
+        o.get("service_id")
+        for o in nfs_objects
+        if isinstance(o, dict) and o.get("service_id")
+    ]
+    if not service_ids:
+        return []
+    hostnames = set()
+    for sid in service_ids:
+        text = _orch_ps_json_stdout(
+            installer_node,
+            f"ceph orch ps --service_name nfs.{sid} --format json",
+        )
+        if not text:
+            continue
+        try:
+            daemons = json.loads(text)
+        except json.JSONDecodeError:
+            log.warning("Could not parse orch ps JSON for nfs.%s", sid)
+            continue
+        for d in daemons:
+            h = d.get("hostname")
+            if h:
+                hostnames.add(h)
+    return [n for n in cluster_nodes if getattr(n, "hostname", None) in hostnames]
+
+
 def create_nfs_via_file_and_verify(
-    installer_node, nfs_objects, timeout, nfs_nodes=None
+    installer_node, nfs_objects, timeout, nfs_nodes=None, cluster_nodes=None
 ):
     """
-    Create a temporary YAML file with NFS Ganesha configuration.
-    Args:
-        installer_node: The node where the NFS Ganesha configuration will be applied.
-                      Can be a single node or list of nodes (first node will be used)
-        nfs_objects: List of NFS Ganesha configuration objects.
-    Returns:
-        str: Path to the temporary YAML file.
-    """
-    temp_file = tempfile.NamedTemporaryFile(suffix=".yaml")
+    Write NFS Ganesha spec YAML on the installer node and run ``ceph orch apply -i``.
 
+    The spec must live on the installer (SFTP + ``orch apply`` both use remote paths).
+
+    After a successful apply and service verification, systemd coredump settings are
+    enabled on NFS server nodes via ``Enable_nfs_coredump``. Pass ``nfs_nodes`` when
+    known (typical single-host BYOK), or ``cluster_nodes`` (all cluster nodes) to
+    resolve hosts from ``ceph orch ps`` for each ``service_id`` in ``nfs_objects``.
+    """
     # Handle case where installer_node is a list
     if isinstance(installer_node, list):
         installer_node = installer_node[0]
 
-    # Use a stable remote path in /tmp/ instead of the local temp file name,
-    # which can contain platform-specific nested paths (e.g. /var/folders on macOS)
-    # that don't exist on the remote Linux node.
-    remote_path = f"/tmp/{os.path.basename(temp_file.name)}"
-    spec_file = installer_node.remote_file(
-        sudo=True, file_name=remote_path, file_mode="wb"
-    )
-    spec = yaml.dump_all(nfs_objects, sort_keys=False, indent=2).encode("utf-8")
-    spec_file.write(spec)
-    spec_file.flush()
+    remote_spec = "/tmp/cephci_nfs_spec_{}.yaml".format(uuid.uuid4().hex)
+    spec_fp = None
+    try:
+        spec_fp = installer_node.remote_file(
+            sudo=True, file_name=remote_spec, file_mode="wb"
+        )
+        spec_fp.write(
+            yaml.dump_all(nfs_objects, sort_keys=False, indent=2).encode("utf-8")
+        )
+        spec_fp.flush()
+    finally:
+        if spec_fp is not None:
+            try:
+                spec_fp.close()
+            except OSError:
+                pass
 
     try:
-        # Apply the spec by mounting the remote file into the orchestrator shell
         pos_args = []
         CephAdm(installer_node, mount="/tmp/").ceph.orch.apply(
-            input=remote_path, check_ec=True, pos_args=pos_args
+            input=remote_spec, check_ec=True, pos_args=pos_args
         )
         verify_nfs_ganesha_service(node=installer_node, timeout=timeout)
         log.info("NFS Ganesha spec file applied successfully.")
+        nodes_for_coredump = None
+        if nfs_nodes:
+            nodes_for_coredump = (
+                nfs_nodes if isinstance(nfs_nodes, list) else [nfs_nodes]
+            )
+        elif cluster_nodes:
+            nodes_for_coredump = _resolve_nfs_nodes_for_service_ids(
+                installer_node, nfs_objects, cluster_nodes
+            )
+        if nodes_for_coredump:
+            log.info(
+                "Enabling NFS coredump on node(s): %s",
+                [getattr(n, "hostname", n) for n in nodes_for_coredump],
+            )
+            Enable_nfs_coredump(nodes_for_coredump)
+        else:
+            log.warning(
+                "Enable_nfs_coredump skipped: provide nfs_nodes or cluster_nodes "
+                "to create_nfs_via_file_and_verify so Ganesha hosts can be resolved."
+            )
         return True
     except Exception as err:
         log.error(f"Failed to apply NFS Ganesha spec file: {err}")
+    finally:
+        installer_node.exec_command(
+            sudo=True, cmd="rm -f {}".format(remote_spec), check_ec=False
+        )
 
 
 def delete_nfs_clusters_in_parallel(installer_node, timeout=300, clusters=None):
@@ -1023,7 +1099,7 @@ def open_mandatory_v3_ports(nfs_node, ports_to_open):
     log.info("Firewall rules reloaded successfully")
 
 
-@retry(OperationFailedError, tries=4, delay=5, backoff=2)
+@retry((OperationFailedError, MountFailedError), tries=4, delay=5, backoff=2)
 def mount_retry(client, mount_name, version, port, nfs_server, export_name):
     if Mount(client).nfs(
         mount=mount_name,
@@ -1102,7 +1178,7 @@ def verify_nfs_ganesha_service(node, timeout):
 
 
 def create_multiple_nfs_instance_via_spec_file(
-    spec, replication_number, installer, timeout=300
+    spec, replication_number, installer, timeout=300, cluster_nodes=None
 ):
     """
     Create multiple NFS Ganesha service instances from a base spec file.
@@ -1123,6 +1199,9 @@ def create_multiple_nfs_instance_via_spec_file(
         installer (CephAdm or str): Installer node or handler used for deployment.
         timeout (int, optional): Timeout in seconds for instance creation and verification.
                                  Defaults to 300.
+        cluster_nodes (list, optional): All Ceph cluster nodes; used to resolve NFS
+            daemon hosts for ``Enable_nfs_coredump`` when ``nfs_nodes`` is not passed
+            to ``create_nfs_via_file_and_verify``.
 
     Returns:
         int: 0 on success, 1 on failure.
@@ -1162,7 +1241,9 @@ def create_multiple_nfs_instance_via_spec_file(
         log.debug(f"Full generated specs: {new_objects}")
 
         # Deploy the NFS service(s) via orchestrator
-        if not create_nfs_via_file_and_verify(installer, new_objects, timeout):
+        if not create_nfs_via_file_and_verify(
+            installer, new_objects, timeout, cluster_nodes=cluster_nodes
+        ):
             log.error("NFS Ganesha instance creation failed during verification.")
             return 1
 
