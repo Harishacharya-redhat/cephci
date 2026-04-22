@@ -837,14 +837,21 @@ def check_nfs_daemons_removed_retry(client):
     Raises OperationFailedError if daemons are still present (to trigger retry).
     Returns True if all daemons are removed.
     """
-    try:
-        out = client.exec_command(sudo=True, cmd="ceph orch ls | grep nfs")
-        # if there are no nfs daemons, then grep exit code is 1
-        # hence we check if not err, and not if err
-        if out:
-            raise OperationFailedError("NFS daemons are still present")
-    except Exception as e:
-        log.warning(f"Caugt Exception: {e}")
+    # grep exits 1 when there is no match; use check_ec=False and inspect stdout.
+    out, _ = client.exec_command(
+        sudo=True,
+        cmd="ceph orch ls | grep nfs",
+        check_ec=False,
+    )
+    if out is None:
+        stdout = ""
+    elif isinstance(out, str):
+        stdout = out.strip()
+    else:
+        stdout = out.read().decode().strip()
+
+    if stdout:
+        raise OperationFailedError("NFS daemons are still present")
 
     log.info("All NFS daemons have been removed.")
     return True
@@ -899,8 +906,9 @@ def _resolve_nfs_nodes_for_service_ids(installer_node, nfs_objects, cluster_node
 
 
 def create_nfs_via_file_and_verify(
-    installer_node, nfs_objects, timeout, nfs_nodes=None, cluster_nodes=None
+    installer_node, nfs_objects, timeout, nfs_nodes=None, **kwargs
 ):
+    cluster_nodes = kwargs.get("cluster_nodes")
     """
     Write NFS Ganesha spec YAML on the installer node and run ``ceph orch apply -i``.
 
@@ -1178,8 +1186,9 @@ def verify_nfs_ganesha_service(node, timeout):
 
 
 def create_multiple_nfs_instance_via_spec_file(
-    spec, replication_number, installer, timeout=300, cluster_nodes=None
+    spec, replication_number, installer, timeout=300, **kwargs
 ):
+    cluster_nodes = kwargs.get("cluster_nodes")
     """
     Create multiple NFS Ganesha service instances from a base spec file.
 

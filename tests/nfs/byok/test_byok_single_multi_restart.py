@@ -346,23 +346,8 @@ def run(ceph_cluster, **kw):
                 ca_cert=ca_cert,
             )
 
-            log.info("Step 6: Creating and mounting NFS exports")
-            client_export_mount_dict = create_export_and_mount_for_existing_nfs_cluster(
-                clients,
-                nfs_export,
-                nfs_mount,
-                export_num,
-                fs_name,
-                nfs_name,
-                fs_name,
-                port,
-                version=config.get("nfs_version", "4.0"),
-                enctag=enctag,
-                nfs_server=nfs_node.hostname,
-            )
-
             if config.get("check_sighup", False):
-                log.info("SIGHUP Testing -- begins")
+                log.info("Step 6: SIGHUP Testing -- begins")
                 gklm_cert_alias_new = "certsighup"
                 validate_sighup(
                     installer=installer[0],
@@ -377,9 +362,24 @@ def run(ceph_cluster, **kw):
                     gklm_cert_alias_new=gklm_cert_alias_new,
                 )
 
+            log.info("Step 7: Creating and mounting NFS exports")
+            client_export_mount_dict = create_export_and_mount_for_existing_nfs_cluster(
+                clients,
+                nfs_export,
+                nfs_mount,
+                export_num,
+                fs_name,
+                nfs_name,
+                fs_name,
+                port,
+                version=config.get("nfs_version", "4.0"),
+                enctag=enctag,
+                nfs_server=nfs_node.hostname,
+            )
+
             log.info(
-                "Step 7: Performing I/O validation on NFS exports \n"
-                "Step 8: Validate encryption via FUSE mounts as well"
+                "Step 8: Performing I/O validation on NFS exports \n"
+                "Step 9: Validate encryption via FUSE mounts as well"
             )
             perform_io_operations_and_validate_fuse(
                 client_export_mount_dict,

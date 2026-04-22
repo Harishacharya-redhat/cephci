@@ -2,9 +2,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 import requests
-
 from utility.gklm_client.auth import GklmAuth
-
 
 def _coerce_client_list(data: Any) -> List[Dict[str, Any]]:
     """Normalize list-clients JSON across SKLM / GKLM 5.x response shapes."""

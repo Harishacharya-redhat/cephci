@@ -79,10 +79,9 @@ def run(ceph_cluster, **kw):
         )
 
         log.info("Step 3: generating certificates and keys, and CA_cert from GKLM")
-        if gklm_hostname not in [
-            x.get("alias") for x in gklm_rest_client.certificates.list_certificates()
-        ]:
-            log.info(f"Not Found CA cert alias {gklm_cert_alias}, creating ")
+        system_certs = gklm_rest_client.certificates.list_system_certificates()
+        if gklm_hostname not in [x.get("alias") for x in system_certs]:
+            log.info(f"Not Found CA cert alias {gklm_hostname}, creating ")
             gklm_rest_client.certificates.create_system_certificate(
                 {
                     "type": "Self-signed",
@@ -174,7 +173,6 @@ def run(ceph_cluster, **kw):
         elif operation in [
             "Custom SNI - Validation Hostname",
             "Different SNI and Validation",
-            "No SNI - No Validation",
         ]:
 
             log.info("Creating new GKLM certificate for operation " + operation)
@@ -262,7 +260,7 @@ def run(ceph_cluster, **kw):
             enctag=enctag,
             nfs_server=nfs_node.hostname,
         )
-
+ 
         log.info(
             "Step 7: Performing I/O validation on NFS exports \n"
             "Step 8: Validate encryption via FUSE mounts as well"
@@ -279,6 +277,7 @@ def run(ceph_cluster, **kw):
             "Mismatch Validation Hostname",
             "No SNI - Validate Other Hostname",
             "Different SNI and Validation",
+            "Custom SNI - Validation Hostname",
         ]:
             log.info(
                 "Test failed: Mount succeeded despite hostname mismatch in GKLM certificate."
@@ -292,6 +291,7 @@ def run(ceph_cluster, **kw):
             "Mismatch Validation Hostname",
             "No SNI - Validate Other Hostname",
             "Different SNI and Validation",
+            "Custom SNI - Validation Hostname",
         ]:
             log.info(
                 "Mount failed as expected due to hostname mismatch in GKLM certificate."
@@ -311,10 +311,11 @@ def run(ceph_cluster, **kw):
             "Different SNI and Validation",
         ]:
             log.info("Cleaning up cluster FUSE mounts")
+            mount_map = client_export_mount_dict or {}
             for client in clients:
                 for mount in [
                     m + "_fuse"
-                    for m in client_export_mount_dict.get(client, {}).get("mount", [])
+                    for m in mount_map.get(client, {}).get("mount", [])
                 ]:
                     client.exec_command(
                         sudo=True, cmd=f"rm -rf {mount}/*", long_running=True
@@ -328,24 +329,53 @@ def run(ceph_cluster, **kw):
             clients, nfs_mount, nfs_name, nfs_export, export_num, nfs_nodes=nfs_nodes
         )
 
-        if operation in ["Custom SNI - Validation Hostname", "No SNI - No Validation"]:
-            log.info(
-                f"Updating GKLM system certificate to add KEYSERVING_TLS usage subtype for {gklm_hostname}"
+        # Ensure gklm_hostname system cert is present and has KEYSERVING_TLS
+        log.info(f"Cleanup: Ensuring system certificate for {gklm_hostname} is valid")
+        system_certs = gklm_rest_client.certificates.list_system_certificates()
+        gklm_cert_entry = next(
+            (c for c in system_certs if c.get("alias") == gklm_hostname), None
+        )
+
+        needs_fix = False
+        if not gklm_cert_entry:
+            log.info(f"System certificate {gklm_hostname} missing, recreating.")
+            gklm_rest_client.certificates.create_system_certificate(
+                {
+                    "type": "Self-signed",
+                    "alias": gklm_hostname,
+                    "validity": "3650",
+                    "algorithm": "RSA",
+                    "usageSubtype": "KEYSERVING_TLS",
+                }
             )
-            gklm_rest_client.certificates.update_system_certificate(
-                alias=gklm_hostname,
-                add_usage_subtype="KEYSERVING_TLS",
-            )
-            log.info(
-                f"Updated GKLM system certificate to add KEYSERVING_TLS usage subtype for old {gklm_hostname}"
+            needs_fix = True
+        else:
+            usage = gklm_cert_entry.get("usageSubtype", "")
+            if "KEYSERVING_TLS" not in usage:
+                log.info(f"Adding KEYSERVING_TLS to {gklm_hostname}")
+                gklm_rest_client.certificates.update_system_certificate(
+                    alias=gklm_hostname,
+                    add_usage_subtype="KEYSERVING_TLS",
+                )
+                needs_fix = True
+
+        if needs_fix:
+            log.info("GKLM system certificate updated, restarting server.")
+            gklm_rest_client.server.restart_server()
+            wait_for_gklm_server_restart(
+                gklm_rest_client=gklm_rest_client,
+                timeout=500,
+                check_interval=10,
+                initial_wait=10,
             )
 
+        # Cleanup custom certificates
+        if gklm_rest_client.certificates.system_certificate_alias_exists(
+            new_ca_cert_alias
+        ):
+            log.info(f"Deleting custom SNI certificate {new_ca_cert_alias}")
             gklm_rest_client.certificates.delete_system_certificate(new_ca_cert_alias)
-            log.info(
-                f"Deleted custom SNI certificate with alias {new_ca_cert_alias} to cleanup"
-            )
-            restart_data = gklm_rest_client.server.restart_server()
-            log.info(f"GKLM server restart initiated: {restart_data}")
+            gklm_rest_client.server.restart_server()
             wait_for_gklm_server_restart(
                 gklm_rest_client=gklm_rest_client,
                 timeout=500,
