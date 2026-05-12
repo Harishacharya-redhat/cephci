@@ -1,0 +1,67 @@
+#===============================================================================================
+# NFS v4 ACL regression on Spectrum Scale / GPFS (upstream modules).
+#
+# First test runs basic-storage-scale.sh once.  Other tests set skip_deployment: true
+# so they only NFS-mount clients (see tests/nfs/lib/upstream_gpfs_nfs_setup.py).
+# SKIP_DEPLOYMENT env still works when skip_deployment is not set in YAML.
+# EXPORT_NAME env overrides nfs_export default (/ibm/scale_volume).
+#
+# Conf: conf/spectrum_scale/spectrum_scale_2node.yaml (installer + 2 clients)
+#
+#===============================================================================================
+tests:
+
+  - test:
+      name: NFS v4 ACL suite — GPFS deployment
+      module: upstream_nfs_acl_deploy.py
+      desc: Run basic-storage-scale.sh on installer and mount NFS on clients (suite bootstrap)
+      abort-on-fail: true
+      timeout: 14400
+      config:
+        nfs_version: "4.1"
+        clients: 1
+        mount_point: /mnt/nfs
+        nfs_export: /ibm/scale_volume
+        port: "2049"
+
+  # - test:
+  #     name: NFS v4 ACL functional GPFS upstream
+  #     module: upstream_nfs_acl_functional.py
+  #     desc: Positive NFSv4 ACL scenarios on Scale-exported NFS mount (includes restart/reboot persistence)
+  #     abort-on-fail: false
+  #     timeout: 14400
+  #     config:
+  #       skip_deployment: true
+  #       nfs_version: "4.1"
+  #       clients: 1
+  #       mount_point: /mnt/nfs
+  #       nfs_export: /ibm/scale_volume
+  #       port: "2049"
+
+  # - test:
+  #     name: NFS v4 ACL negative - GPFS
+  #     module: upstream_nfs_acl_negative.py
+  #     desc: Denial and boundary NFSv4 ACL tests on GPFS-backed NFS
+  #     abort-on-fail: false
+  #     timeout: 7200
+  #     config:
+  #       skip_deployment: true
+  #       nfs_version: "4.1"
+  #       clients: 1
+  #       mount_point: /mnt/nfs
+  #       nfs_export: /ibm/scale_volume
+  #       port: "2049"
+
+  - test:
+      name: NFS v4 ACL scale - GPFS
+      module: upstream_nfs_acl_scale.py
+      desc: Large ACE count and persistence-after-remount on GPFS-backed NFS
+      abort-on-fail: false
+      timeout: 14400
+      config:
+        skip_deployment: true
+        nfs_version: "4.1"
+        clients: 1
+        mount_point: /mnt/nfs
+        nfs_export: /ibm/scale_volume
+        port: "2049"
