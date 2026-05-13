@@ -24,33 +24,33 @@ tests:
         nfs_export: /ibm/scale_volume
         port: "2049"
 
-  # - test:
-  #     name: NFS v4 ACL functional GPFS upstream
-  #     module: upstream_nfs_acl_functional.py
-  #     desc: Positive NFSv4 ACL scenarios on Scale-exported NFS mount (includes restart/reboot persistence)
-  #     abort-on-fail: false
-  #     timeout: 14400
-  #     config:
-  #       skip_deployment: true
-  #       nfs_version: "4.1"
-  #       clients: 1
-  #       mount_point: /mnt/nfs
-  #       nfs_export: /ibm/scale_volume
-  #       port: "2049"
+  - test:
+      name: NFS v4 ACL functional GPFS upstream
+      module: upstream_nfs_acl_functional.py
+      desc: Positive NFSv4 ACL scenarios on Scale-exported NFS mount (includes restart/reboot persistence)
+      abort-on-fail: false
+      timeout: 14400
+      config:
+        skip_deployment: true
+        nfs_version: "4.1"
+        clients: 1
+        mount_point: /mnt/nfs
+        nfs_export: /ibm/scale_volume
+        port: "2049"
 
-  # - test:
-  #     name: NFS v4 ACL negative - GPFS
-  #     module: upstream_nfs_acl_negative.py
-  #     desc: Denial and boundary NFSv4 ACL tests on GPFS-backed NFS
-  #     abort-on-fail: false
-  #     timeout: 7200
-  #     config:
-  #       skip_deployment: true
-  #       nfs_version: "4.1"
-  #       clients: 1
-  #       mount_point: /mnt/nfs
-  #       nfs_export: /ibm/scale_volume
-  #       port: "2049"
+  - test:
+      name: NFS v4 ACL negative - GPFS
+      module: upstream_nfs_acl_negative.py
+      desc: Denial and boundary NFSv4 ACL tests on GPFS-backed NFS
+      abort-on-fail: false
+      timeout: 7200
+      config:
+        skip_deployment: true
+        nfs_version: "4.1"
+        clients: 1
+        mount_point: /mnt/nfs
+        nfs_export: /ibm/scale_volume
+        port: "2049"
 
   - test:
       name: NFS v4 ACL scale - GPFS
