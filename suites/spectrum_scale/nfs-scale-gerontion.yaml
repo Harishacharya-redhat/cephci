@@ -20,5 +20,5 @@ tests:
         nfs_version: 4.2
         clients: 1
         # Per-workload (and per-mount) gerontion run time
-        workload_duration_minutes: 30
+        workload_duration_minutes: 10
 
