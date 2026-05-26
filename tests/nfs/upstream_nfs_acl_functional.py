@@ -10,7 +10,7 @@ Runs all positive / feature-verification tests in a single pass:
   - POSIX Interaction (ACL->chmod, chmod->ACL)
   - Symlink (Follow -L, Inode proof)
   - Recursive (Apply, Override, Mixed)
-  - Persistence (Rename, Hard link, Restart, Reboot)
+  - Persistence (Rename, Hard link, Restart; Reboot disabled)
 """
 
 from time import sleep
@@ -53,6 +53,10 @@ PERM_RX = "rxtcy"  # rx  -> rxtcy
 KNOWN_ISSUES = {
     "INHERIT_ONLY": "IBMCEPH-13881",
 }
+
+# NFS-Ganesha is not auto-restarted after reboot, causing stale mount entries.
+# Re-enable once auto-restart is wired up.
+ENABLE_REBOOT_TEST = False
 
 
 def run(ceph_cluster, **kw):
@@ -156,14 +160,13 @@ def run(ceph_cluster, **kw):
                 _run_test(_test_restart, acl, server_node),
             )
         )
-        # Reboot test skipped: NFS-Ganesha is not auto-restarted after reboot,
-        # causing stale mount entries. Re-enable once auto-restart is wired up.
-        # results.append(
-        #     (
-        #         "Reboot Persistence",
-        #         _run_test(_test_reboot, acl, server_node),
-        #     )
-        # )
+        if ENABLE_REBOOT_TEST:
+            results.append(
+                (
+                    "Reboot Persistence",
+                    _run_test(_test_reboot, acl, server_node),
+                )
+            )
 
         return _report_results(results)
 

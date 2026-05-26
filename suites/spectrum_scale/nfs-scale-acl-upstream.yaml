@@ -27,7 +27,7 @@ tests:
   - test:
       name: NFS v4 ACL functional GPFS upstream
       module: upstream_nfs_acl_functional.py
-      desc: Positive NFSv4 ACL scenarios on Scale-exported NFS mount (includes restart/reboot persistence)
+      desc: Positive NFSv4 ACL scenarios on Scale-exported NFS mount (includes restart persistence; reboot disabled)
       abort-on-fail: false
       timeout: 14400
       config:
