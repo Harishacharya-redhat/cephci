@@ -10,7 +10,7 @@ Runs all positive / feature-verification tests in a single pass:
   - POSIX Interaction (ACL->chmod, chmod->ACL)
   - Symlink (Follow -L, Inode proof)
   - Recursive (Apply, Override, Mixed)
-  - Persistence (Rename, Hard link, Restart; Reboot disabled)
+  - Persistence (Rename, Hard link; Restart/Reboot disabled)
 """
 
 from time import sleep
@@ -57,6 +57,9 @@ KNOWN_ISSUES = {
 # NFS-Ganesha is not auto-restarted after reboot, causing stale mount entries.
 # Re-enable once auto-restart is wired up.
 ENABLE_REBOOT_TEST = False
+
+# GPFS/Scale: systemctl restart of nfs-ganesha hangs the client mount (mmnfs restart needed).
+ENABLE_RESTART_TEST = False
 
 
 def run(ceph_cluster, **kw):
@@ -154,19 +157,20 @@ def run(ceph_cluster, **kw):
         # --- Persistence (destructive tests last) ---
         results.append(("Rename Persistence", _run_test(_test_rename, acl)))
         results.append(("Hard Link Persistence", _run_test(_test_hard_link, acl)))
-        results.append(
-            (
-                "Restart Persistence",
-                _run_test(_test_restart, acl, server_node),
-            )
-        )
-        if ENABLE_REBOOT_TEST:
-            results.append(
-                (
-                    "Reboot Persistence",
-                    _run_test(_test_reboot, acl, server_node),
-                )
-            )
+        # if ENABLE_RESTART_TEST:
+        #     results.append(
+        #         (
+        #             "Restart Persistence",
+        #             _run_test(_test_restart, acl, server_node),
+        #         )
+        #     )
+        # if ENABLE_REBOOT_TEST:
+        #     results.append(
+        #         (
+        #             "Reboot Persistence",
+        #             _run_test(_test_reboot, acl, server_node),
+        #         )
+        #     )
 
         return _report_results(results)
 
