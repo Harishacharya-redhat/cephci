@@ -53,7 +53,7 @@ def run (ceph_cluster, **kw):
                 "file_name": None,  # default None, else list of filenames required to test ['file1','file2']
                 "io_type": ["all"],
                 "file_size": "auto",  # mention alternate size in as 64k/64m/64g for KB/MB/GB
-                "max_file_size": "100m",
+                "max_file_size": "5g",
                 "reclen": "auto",  # mention alternate size as 64k/64m/64g for KB/MB/GB
                 "cpu_use_report": True,  # to report cpu use by each test
                 "spreadsheet": True,  # to copy stats to spreadsheet

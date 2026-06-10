@@ -59,6 +59,7 @@ time_based
 size=1G
 directory=/mnt/nfsv3
 group_reporting
+numjobs=100
 
 [seqwrite]
 rw=write
@@ -94,6 +95,7 @@ time_based
 size=1G
 directory=/mnt/nfsv4
 group_reporting
+numjobs=100
 
 [seqwrite]
 rw=write
