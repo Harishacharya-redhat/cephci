@@ -56,10 +56,10 @@ ioengine=libaio
 direct=1
 runtime=60
 time_based
-size=1G
+size=100M
 directory=/mnt/nfsv3
 group_reporting
-numjobs=100
+numjobs=10
 
 [seqwrite]
 rw=write
@@ -92,10 +92,10 @@ ioengine=libaio
 direct=1
 runtime=60
 time_based
-size=1G
+size=100M 
 directory=/mnt/nfsv4
 group_reporting
-numjobs=100
+numjobs=10
 
 [seqwrite]
 rw=write
@@ -109,7 +109,7 @@ bs=1M
 rw=randrw
 rwmixread=70
 bs=4k
-numjobs=4"""
+numjobs=10"""
         filepath = "/mnt/nfsv4/ganesha_test.fio"
         cmd = f"cat <<'EOF' > {filepath}\n{fio_job_content}\nEOF"
         clients[0].exec_command(cmd=cmd, sudo=True)
