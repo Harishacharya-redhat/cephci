@@ -1,11 +1,13 @@
 import time
 from threading import Thread
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
-
-from ceph.ceph import CommandFailed
-from cli.exceptions import ConfigError, OperationFailedError
-from cli.utilities.utils import create_files, perform_lookups
+from nfs_operations import (
+    cleanup_cluster,
+    init_cluster_checks,
+    log_cluster_health_on_failure,
+    run_post_test_cluster_checks,
+    setup_nfs_cluster,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -56,6 +58,8 @@ def run(ceph_cluster, **kw):
 
     clients = clients[:no_clients]
     nfs_node = nfs_nodes[0]
+    rados_obj, cluster_start_time = init_cluster_checks(ceph_cluster, config)
+    test_result = 0
     fs_name = "cephfs"
     nfs_name = "cephfs-nfs"
     nfs_export = "/export"
@@ -105,11 +109,11 @@ def run(ceph_cluster, **kw):
 
         # Perform rm while file creation and lookup is in progress
         max_total_time = 300
-        start_time = time.time()
+        rm_loop_start = time.time()
         iteration = 0
         log.info("Performing rm while file creation and lookup in progress")
         while operations[0].is_alive() or operations[1].is_alive():
-            if time.time() - start_time > max_total_time:
+            if time.time() - rm_loop_start > max_total_time:
                 log.error(f"Operations exceeded {max_total_time}s timeout")
                 raise OperationFailedError("Parallel operations timed out")
 
@@ -133,14 +137,17 @@ def run(ceph_cluster, **kw):
                 op_name = "create" if idx == 0 else "lookup"
                 log.error(f"Thread {idx} ({op_name}) did not complete in 300s")
                 raise OperationFailedError(f"Thread {idx} hung")
-        return 0
 
     except Exception as e:
         log.error(f"Failed to validate parallel write, lookup and rm: {e}")
-        return 1
+        log_cluster_health_on_failure(rados_obj)
+        test_result = 1
     finally:
         log.info("Cleaning up")
         cleanup_cluster(
             clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=nfs_nodes[0]
         )
         log.info("Cleaning up successful")
+        if run_post_test_cluster_checks(rados_obj, cluster_start_time):
+            test_result = 1
+    return test_result

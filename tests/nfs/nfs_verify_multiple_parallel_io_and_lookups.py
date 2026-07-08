@@ -1,11 +1,13 @@
 import time
 from threading import Thread
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
-
-from cli.exceptions import ConfigError, OperationFailedError
-from cli.io.io import linux_untar
-from cli.utilities.utils import create_files
+from nfs_operations import (
+    cleanup_cluster,
+    init_cluster_checks,
+    log_cluster_health_on_failure,
+    run_post_test_cluster_checks,
+    setup_nfs_cluster,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -34,6 +36,8 @@ def run(ceph_cluster, **kw):
 
     clients = clients[:no_clients]  # Select only the required number of clients
     nfs_node = nfs_nodes[0]
+    rados_obj, cluster_start_time = init_cluster_checks(ceph_cluster, config)
+    test_result = 0
     fs_name = "cephfs"
     nfs_name = "cephfs-nfs"
     nfs_export = "/export"
@@ -125,10 +129,10 @@ def run(ceph_cluster, **kw):
             except Exception as e:
                 log.error(f"Parallel IO test failed: {e}")
                 raise
-        return 0
     except Exception as e:
         log.error(f"Failed to validate multiple ios and lookups : {e}")
-        return 1
+        log_cluster_health_on_failure(rados_obj)
+        test_result = 1
     finally:
         if cleanup:
             log.info("Cleaning up")
@@ -139,3 +143,6 @@ def run(ceph_cluster, **kw):
                 clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=nfs_nodes[0]
             )
             log.info("Cleaning up successful")
+        if run_post_test_cluster_checks(rados_obj, cluster_start_time):
+            test_result = 1
+    return test_result

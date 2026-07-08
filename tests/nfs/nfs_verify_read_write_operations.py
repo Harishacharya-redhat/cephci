@@ -1,6 +1,10 @@
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
-
-from cli.exceptions import ConfigError, OperationFailedError
+from nfs_operations import (
+    cleanup_cluster,
+    init_cluster_checks,
+    log_cluster_health_on_failure,
+    run_post_test_cluster_checks,
+    setup_nfs_cluster,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -26,6 +30,8 @@ def run(ceph_cluster, **kw):
 
     clients = clients[:no_clients]  # Select only the required number of clients
     nfs_node = nfs_nodes[0]
+    rados_obj, cluster_start_time = init_cluster_checks(ceph_cluster, config)
+    test_result = 0
     fs_name = "cephfs"
     nfs_name = "cephfs-nfs"
     nfs_export = "/export"
@@ -191,10 +197,10 @@ def run(ceph_cluster, **kw):
                     "Mv operation doesn't overwrite the content of existing file"
                 )
             log.info("Expected: mv operation has overwritten the file")
-        return 0
     except Exception as e:
         log.error(f"Failed to validate read write operations: {e}")
-        return 1
+        log_cluster_health_on_failure(rados_obj)
+        test_result = 1
     finally:
         # Clean up test user if it was created
         if operation in ["verify_permission", "mv_file"]:
@@ -209,3 +215,6 @@ def run(ceph_cluster, **kw):
 
         cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=nfs_node)
         log.info("Cleaning up successful")
+        if run_post_test_cluster_checks(rados_obj, cluster_start_time):
+            test_result = 1
+    return test_result

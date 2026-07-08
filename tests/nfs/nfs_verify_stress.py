@@ -2,11 +2,13 @@ import json
 from threading import Thread
 from time import sleep
 
-from nfs_operations import cleanup_cluster, setup_nfs_cluster
-
-from cli.ceph.ceph import Ceph
-from cli.exceptions import ConfigError
-from cli.io.small_file import SmallFile
+from nfs_operations import (
+    cleanup_cluster,
+    init_cluster_checks,
+    log_cluster_health_on_failure,
+    run_post_test_cluster_checks,
+    setup_nfs_cluster,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -37,6 +39,8 @@ def run(ceph_cluster, **kw):
 
     clients = clients[:no_clients]  # Select only the required number of clients
     servers = nfs_nodes[:no_servers]
+    rados_obj, cluster_start_time = init_cluster_checks(ceph_cluster, config)
+    test_result = 0
     fs_name = "cephfs"
     nfs_name = "cephfs-nfs"
     nfs_export = "/export"
@@ -94,7 +98,8 @@ def run(ceph_cluster, **kw):
             export_get_path = output["path"]
             if export_get_path != export_path:
                 log.error("Export path is not correct")
-                return 1
+                test_result = 1
+                raise ConfigError("Export path is not correct")
 
         # Perform unexport while IO in progress
         for i in range(10, 60):
@@ -103,12 +108,14 @@ def run(ceph_cluster, **kw):
 
         # Wait for the IO to complete
         th.join()
-        return 0
 
     except Exception as e:
         log.error(f"Failed to setup nfs cluster {e}")
+        log_cluster_health_on_failure(rados_obj)
         cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export)
-        return 1
+        test_result = 1
     finally:
         cleanup_cluster(clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=servers)
-        pass
+        if run_post_test_cluster_checks(rados_obj, cluster_start_time):
+            test_result = 1
+    return test_result

@@ -11,6 +11,9 @@ import yaml
 from looseversion import LooseVersion
 
 from ceph.ceph import CommandFailed
+from ceph.ceph_admin import CephAdmin
+from ceph.rados.core_workflows import RadosOrchestrator
+from ceph.rados.utils import get_cluster_timestamp
 from ceph.waiter import WaitUntil
 from cli.ceph.ceph import Ceph
 from cli.cephadm.cephadm import CephAdm
@@ -26,6 +29,54 @@ log = Log(__name__)
 ceph_cluster_obj = None
 setup_start_time = None
 GANESHA_SUBVOL_GROUP = "ganeshagroup"
+
+
+def init_cluster_checks(ceph_cluster, config):
+    """Initialize RadosOrchestrator and capture the cluster timestamp at test start."""
+    cephadm = CephAdmin(cluster=ceph_cluster, **config)
+    rados_obj = RadosOrchestrator(node=cephadm)
+    start_time = get_cluster_timestamp(rados_obj.node)
+    log.debug("Test workflow started. Start time: %s", start_time)
+    return rados_obj, start_time
+
+
+def log_cluster_health_on_failure(rados_obj):
+    """Best-effort cluster health logging when a test fails mid-run."""
+    try:
+        rados_obj.log_cluster_health()
+    except Exception as e:
+        log.warning("Could not log cluster health: %s", e)
+
+
+def run_post_test_cluster_checks(rados_obj, start_time, check_nfs=True):
+    """
+    Log cluster health and check for daemon crashes (including NFS-Ganesha logs).
+
+    Returns:
+        int: 1 if checks failed, 0 if passed.
+    """
+    result = 0
+
+    try:
+        rados_obj.log_cluster_health()
+    except Exception as e:
+        log.warning("Could not log cluster health: %s", e)
+
+    test_end_time = get_cluster_timestamp(rados_obj.node)
+    log.debug(
+        "Test workflow completed. Start time: %s, End time: %s",
+        start_time,
+        test_end_time,
+    )
+    if rados_obj.check_crash_status(
+        start_time=start_time,
+        end_time=test_end_time,
+        check_nfs=check_nfs,
+    ):
+        log.error("Test failed due to crash at the end of test")
+        result = 1
+
+    return result
 
 
 def ensure_ganeshagroup(

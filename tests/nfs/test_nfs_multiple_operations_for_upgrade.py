@@ -1,7 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor
 
 from cli.exceptions import ConfigError, OperationFailedError
-from tests.nfs.nfs_operations import cleanup_cluster, setup_nfs_cluster
+from tests.nfs.nfs_operations import (
+    init_cluster_checks,
+    log_cluster_health_on_failure,
+    run_post_test_cluster_checks,
+    cleanup_cluster,
+    setup_nfs_cluster,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -165,6 +171,8 @@ def run(ceph_cluster, **kw):
 
     clients = clients[:no_clients]  # Select only the required number of clients
     nfs_node = nfs_nodes[0]
+    rados_obj, cluster_start_time = init_cluster_checks(ceph_cluster, config)
+    test_result = 0
     fs_name = "cephfs"
     nfs_name = "cephfs-nfs"
     nfs_export = "/export"
@@ -318,7 +326,6 @@ def run(ceph_cluster, **kw):
                 for future in futures:
                     future.result()
             log.info("half of the files deleted successfully before upgrade")
-            return 0
 
         elif operation == "after_upgrade":
             log.info("delete files in parallel using ThreadPoolExecutor after upgrade")
@@ -337,8 +344,8 @@ def run(ceph_cluster, **kw):
                 for future in futures:
                     future.result()
             log.info("All files deleted successfully after upgrade")
-            return 0
     except Exception as e:
+        log_cluster_health_on_failure(rados_obj)
         raise ConfigError(f"test_nfs_multiple_operations_for_upgrade: {e} failed")
     finally:
         if operation == "after_upgrade":
@@ -346,3 +353,8 @@ def run(ceph_cluster, **kw):
             cleanup_cluster(
                 clients, nfs_mount, nfs_name, nfs_export, nfs_nodes=nfs_node
             )
+        if run_post_test_cluster_checks(rados_obj, cluster_start_time):
+            test_result = 1
+    if test_result:
+        raise ConfigError("test_nfs_multiple_operations_for_upgrade: cluster checks failed")
+    return 0

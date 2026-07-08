@@ -10,7 +10,10 @@ from tests.nfs.nfs_operations import (
     NfsCleanupFailed,
     _get_client_specific_mount_versions,
     exports_mounts_perclient,
+    init_cluster_checks,
+    log_cluster_health_on_failure,
     mount_retry,
+    run_post_test_cluster_checks,
 )
 from tests.nfs.test_nfs_multiple_operations_for_upgrade import (
     create_file,
@@ -444,11 +447,14 @@ def run(ceph_cluster, **kw):
     clients = clients[:no_clients]
     client = clients[0]  # Select only the required number of clients
 
+    rados_obj, cluster_start_time = init_cluster_checks(ceph_cluster, config)
+
     # 1. pick the existing NFS cluster
     nfs_cluster_name = Ceph(client).nfs.cluster.ls()[0]
     nfs_hostname = Ceph(client).nfs.cluster.info(nfs_cluster_name)[nfs_cluster_name][
         "backend"
     ][0]["hostname"]
+    test_result = 0
     try:
         for l in range(loop_count):
             log.info(
@@ -488,7 +494,15 @@ def run(ceph_cluster, **kw):
             remove_exports_and_unmount(
                 client_export_mount_dict, clients, nfs_cluster_name
             )
-        return 0
     except Exception as e:
         log.error(f"An error occurred during NFS IO operations: {e}")
-        raise OperationFailedError(f"NFS IO operations failed: {e}")
+        log_cluster_health_on_failure(rados_obj)
+        test_result = 1
+    finally:
+        log.info("\n\n ********* Executing finally block ******** \n\n")
+        if run_post_test_cluster_checks(rados_obj, cluster_start_time):
+            test_result = 1
+
+    if test_result:
+        raise OperationFailedError("NFS IO operations during upgrade failed")
+    return 0
