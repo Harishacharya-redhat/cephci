@@ -1,6 +1,7 @@
 """Pure helpers for splitting export vs mount kwargs in NFS export/mount flows."""
 
 # kwargs accepted by Mount.nfs(); export-only keys (e.g. enctag) must stay out.
+# mounttimeout is a legacy alias for command timeout (not an NFS -o option).
 MOUNT_OPTS_KEYS = frozenset(
     (
         "xprtsec",

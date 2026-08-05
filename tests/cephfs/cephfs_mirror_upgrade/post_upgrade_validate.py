@@ -8,6 +8,10 @@ from looseversion import LooseVersion
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_mirroring.cephfs_mirroring_utils import CephfsMirroringUtils
 from tests.cephfs.cephfs_utilsV1 import FsUtils
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from utility.log import Log
 from utility.retry import retry
 from utility.utils import get_ceph_version_from_cluster
@@ -34,11 +38,18 @@ def run(ceph_cluster, **kw):
         Exception: Any unexpected exceptions that might occur during the test.
     """
 
+    config = kw.get("config")
+    ceph_cluster_dict = kw.get("ceph_cluster_dict")
+    rados_obj_src, crash_start_src = init_cluster_health_check(
+        ceph_cluster_dict.get("ceph1"), config
+    )
+    rados_obj_tgt, crash_start_tgt = init_cluster_health_check(
+        ceph_cluster_dict.get("ceph2"), config
+    )
     try:
 
         test_data = kw.get("test_data")
         log.info(test_data)
-        ceph_cluster_dict = kw.get("ceph_cluster_dict")
         fs_mirroring_utils = CephfsMirroringUtils(
             ceph_cluster_dict.get("ceph1"), ceph_cluster_dict.get("ceph2")
         )
@@ -53,7 +64,6 @@ def run(ceph_cluster, **kw):
             random.choice(string.ascii_lowercase + string.digits)
             for _ in list(range(3))
         )
-        config = kw.get("config")
         log_dir = kw["run_config"]["log_dir"]
         with open(f"{log_dir}/variables.pkl", "rb") as file:
             (
@@ -361,6 +371,13 @@ def run(ceph_cluster, **kw):
         log.error(traceback.format_exc())
         return 1
     finally:
+        crash_detected = log_cluster_health_and_check_crashes(
+            rados_obj_src, crash_start_src
+        )
+        crash_detected = (
+            log_cluster_health_and_check_crashes(rados_obj_tgt, crash_start_tgt)
+            or crash_detected
+        )
         log.info("Clean up the system")
         log.info(f"clenaup has the following value {config.get('clean_up')}")
         if config.get("clean_up", True):
@@ -429,3 +446,5 @@ def run(ceph_cluster, **kw):
                 source_clients[0].exec_command(
                     sudo=True, cmd=f"rm -rf {path}", timeout=180, check_ec=False
                 )
+        if crash_detected:
+            return 1

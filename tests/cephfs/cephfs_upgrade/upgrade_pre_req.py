@@ -10,6 +10,10 @@ from looseversion import LooseVersion
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from tests.cephfs.cephfs_volume_management import wait_for_process
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from tests.cephfs.lib.cephfs_common_lib import CephFSCommonUtils
 from tests.cephfs.snapshot_clone.cephfs_snap_utils import SnapUtils
 from utility.log import Log
@@ -37,10 +41,11 @@ def run(ceph_cluster, **kw):
     Dir pinning and set quota to the subvolume
     Run IOs on all the mount points from a different client machine.
     """
+    config = kw.get("config")
+    rados_obj, crash_start_time = init_cluster_health_check(ceph_cluster, config)
     try:
         fs_util = FsUtils(ceph_cluster)
         snap_util = SnapUtils(ceph_cluster)
-        config = kw.get("config")
         build = config.get("build", config.get("rhbuild"))
         clients = ceph_cluster.get_ceph_objects("client")
         cephfs_common_utils = CephFSCommonUtils(ceph_cluster)
@@ -640,3 +645,6 @@ def run(ceph_cluster, **kw):
         log.error(e)
         log.error(traceback.format_exc())
         return 1
+    finally:
+        if log_cluster_health_and_check_crashes(rados_obj, crash_start_time):
+            return 1

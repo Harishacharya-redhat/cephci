@@ -6,6 +6,10 @@ from pip._internal.exceptions import CommandError
 
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_utilsV1 import FsUtils
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from utility.log import Log
 from utility.retry import retry
 
@@ -22,6 +26,8 @@ def run(ceph_cluster, **kw):
     4. Perform this till upgrade in progress
     5. Check if there are any crash occurred
     """
+    config = kw.get("config")
+    rados_obj, crash_start_time = init_cluster_health_check(ceph_cluster, config)
     try:
         fs_util = FsUtils(ceph_cluster)
         clients = ceph_cluster.get_ceph_objects("client")
@@ -81,7 +87,8 @@ def run(ceph_cluster, **kw):
         log.error(traceback.format_exc())
         return 1
     finally:
-        pass
+        if log_cluster_health_and_check_crashes(rados_obj, crash_start_time):
+            return 1
 
 
 def wait_for_two_active_mds(client1, fs_name, max_wait_time=600, retry_interval=20):

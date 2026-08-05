@@ -1,3 +1,4 @@
+from ceph.ceph import CommandFailed
 from cli import Cli
 from cli.ceph.auth.auth import Auth
 from cli.exceptions import OperationFailedError
@@ -31,7 +32,8 @@ class Mount(Cli):
         The resulting command looks like::
 
             mount -t nfs -o vers=<version>,port=<port>[,proto=<proto>]
-                [,xprtsec=<xprtsec>] <server>:<export> <mount>
+                [,xprtsec=<xprtsec>][,timeo=...][,retrans=...]
+                <server>:<export> <mount>
 
         Args:
             mount (str): Local mount-point path.
@@ -47,16 +49,18 @@ class Mount(Cli):
                 ``-o``.  Pass ``"rdma"`` for NFS-over-RDMA mounts.
             xprtsec (str): Transport-security option (e.g. ``"tls"``
                 for RPC-with-TLS).
-            mounttimeout (int): NFS mount timeout in seconds (``-o``
-                mounttimeout).  Fails fast when Ganesha is restarting.
+            mounttimeout (int): Legacy alias for command ``timeout``.
+                Not passed as an NFS ``-o`` option (unsupported by
+                mount.nfs on RHEL). Used only when ``timeout`` is unset.
             timeo (int): NFS RPC timeout in deciseconds (``-o timeo``).
             retrans (int): NFS RPC retransmit count (``-o retrans``).
             timeout (int): cephci command timeout in seconds (default
-                3600 for long-running mounts).
+                3600 for long-running mounts). Fail-fast for upgrade
+                remounts should use this, not an NFS ``-o`` option.
 
         Raises:
-            MountFailedError: If the mount point does not appear in
-                the ``mount`` table after the command completes.
+            MountFailedError: If the mount command fails or the mount
+                point does not appear in the ``mount`` table.
         """
         self._ensure_nfs_utils()
 
@@ -72,7 +76,8 @@ class Mount(Cli):
         xprtsec = kwargs.get("xprtsec")
         if xprtsec:
             cmd += f",xprtsec={xprtsec}"
-        for opt in ("mounttimeout", "timeo", "retrans"):
+        # mounttimeout is not a valid nfs(5)/mount.nfs -o option on RHEL.
+        for opt in ("timeo", "retrans"):
             if opt in kwargs:
                 cmd += f",{opt}={kwargs[opt]}"
         extra_mount_options = kwargs.get("extra_mount_options")
@@ -80,18 +85,26 @@ class Mount(Cli):
             cmd += f",{extra_mount_options}"
         cmd += f" {server}:{export} {mount}"
 
-        exec_kw = {"sudo": True, "long_running": True, "cmd": cmd}
-        mount_timeout = kwargs.get("timeout")
-        if mount_timeout is not None:
-            exec_kw["timeout"] = mount_timeout
-        self.execute(**exec_kw)
+        exec_kw = {"sudo": True, "long_running": True, "check_ec": True, "cmd": cmd}
+        # Prefer explicit timeout; fall back to legacy mounttimeout alias.
+        if "timeout" in kwargs and kwargs["timeout"] is not None:
+            exec_kw["timeout"] = kwargs["timeout"]
+        elif "mounttimeout" in kwargs and kwargs["mounttimeout"] is not None:
+            exec_kw["timeout"] = kwargs["mounttimeout"]
+        try:
+            self.execute(**exec_kw)
+        except CommandFailed as exc:
+            raise MountFailedError(f"Nfs mount failed: {exc}") from exc
 
         out = self.execute(sudo=True, cmd="mount")
         if isinstance(out, tuple):
             out = out[0]
 
-        if not mount.rstrip("/") in out:
-            raise MountFailedError(f"Nfs mount failed: {out}")
+        if mount.rstrip("/") not in out:
+            raise MountFailedError(
+                f"Nfs mount failed: mount point '{mount}' not present after "
+                f"successful mount command for {server}:{export}"
+            )
 
 
 class Unmount(Cli):

@@ -6,6 +6,10 @@ import traceback
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_mirroring.cephfs_mirroring_utils import CephfsMirroringUtils
 from tests.cephfs.cephfs_utilsV1 import FsUtils
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -29,9 +33,15 @@ def run(ceph_cluster, **kw):
         Exception: Any unexpected exceptions that might occur during the test.
     """
 
+    config = kw.get("config")
+    ceph_cluster_dict = kw.get("ceph_cluster_dict")
+    rados_obj_src, crash_start_src = init_cluster_health_check(
+        ceph_cluster_dict.get("ceph1"), config
+    )
+    rados_obj_tgt, crash_start_tgt = init_cluster_health_check(
+        ceph_cluster_dict.get("ceph2"), config
+    )
     try:
-        config = kw.get("config")
-        ceph_cluster_dict = kw.get("ceph_cluster_dict")
         fs_util_ceph1 = FsUtils(ceph_cluster_dict.get("ceph1"))
         fs_util_ceph2 = FsUtils(ceph_cluster_dict.get("ceph2"))
         fs_mirroring_utils = CephfsMirroringUtils(
@@ -361,6 +371,13 @@ def run(ceph_cluster, **kw):
         log.error(traceback.format_exc())
         return 1
     finally:
+        crash_detected = log_cluster_health_and_check_crashes(
+            rados_obj_src, crash_start_src
+        )
+        crash_detected = (
+            log_cluster_health_and_check_crashes(rados_obj_tgt, crash_start_tgt)
+            or crash_detected
+        )
         log.info("Create a Variables file for post validations")
         log_dir = kw["run_config"]["log_dir"]
         with open(f"{log_dir}/variables.pkl", "wb") as file:
@@ -381,3 +398,5 @@ def run(ceph_cluster, **kw):
                 ),
                 file,
             )
+        if crash_detected:
+            return 1

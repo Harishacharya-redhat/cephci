@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from looseversion import LooseVersion
 
 from tests.cephfs.cephfs_utilsV1 import FsUtils
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from tests.cephfs.lib.cephfs_common_lib import CephFSCommonUtils
 from tests.cephfs.lib.cephfs_subvol_metric_utils import MDSMetricsHelper
 from tests.cephfs.snapshot_clone.cephfs_snap_utils import SnapUtils
@@ -735,6 +739,8 @@ def run(ceph_cluster, **kw):
     3. MDS observability post-upgrade validation on existing and new FS volumes.
 
     """
+    config_kw = kw.get("config", {})
+    rados_obj, crash_start_time = init_cluster_health_check(ceph_cluster, config_kw)
     try:
         global ibm_build, common_util, fs_util, snap_util, test_reqs
         fs_util = FsUtils(ceph_cluster)
@@ -744,7 +750,6 @@ def run(ceph_cluster, **kw):
         nfs_servers = ceph_cluster.get_ceph_objects("nfs")
         common_util = CephFSCommonUtils(ceph_cluster)
         test_data = kw.get("test_data")
-        config_kw = kw.get("config", {})
         build = config_kw.get("build", config_kw.get("rhbuild", ""))
         log.info("Get the Ceph pre-upgrade config data from cephfs_upgrade_config.json")
         f = clients[0].remote_file(
@@ -803,6 +808,9 @@ def run(ceph_cluster, **kw):
         log.info(traceback.format_exc())
         log.error(e)
         return 1
+    finally:
+        if log_cluster_health_and_check_crashes(rados_obj, crash_start_time):
+            return 1
 
 
 # HELPER ROUTINES

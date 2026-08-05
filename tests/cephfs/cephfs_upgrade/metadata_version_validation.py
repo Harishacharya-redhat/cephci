@@ -3,6 +3,10 @@ import traceback
 
 from looseversion import LooseVersion
 
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from utility.log import Log
 
 log = Log(__name__)
@@ -32,6 +36,8 @@ def run(ceph_cluster, **kw):
         "ceph mds stat",
         "ceph fs dump",
     ]
+    config = kw.get("config")
+    rados_obj, crash_start_time = init_cluster_health_check(ceph_cluster, config)
     try:
         out0, err0 = client.exec_command(
             sudo=True, cmd=f"stat {ceph_version_path}", check_ec=False
@@ -166,3 +172,6 @@ def run(ceph_cluster, **kw):
         log.error(e)
         log.error(traceback.format_exc())
         return 1
+    finally:
+        if log_cluster_health_and_check_crashes(rados_obj, crash_start_time):
+            return 1

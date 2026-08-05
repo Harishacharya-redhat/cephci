@@ -17,6 +17,10 @@ from tests.cephfs.cephfs_utilsV1 import FsUtils
 from tests.cephfs.cephfs_volume_management import wait_for_process
 from tests.cephfs.exceptions import FsBaseException, NormalizationValidationError
 from tests.cephfs.lib.cephfs_attributes_lib import CephFSAttributeUtilities
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from tests.cephfs.lib.cephfs_common_lib import CephFSCommonUtils
 from tests.cephfs.lib.fscrypt_utils import FscryptUtils
 from tests.cephfs.snapshot_clone.cephfs_cg_io import CG_snap_IO
@@ -1602,6 +1606,9 @@ def run(ceph_cluster, **kw):
     7. Post-upgrade CG quiesce feature validation
     8. Validate the case sensitivity functional TC for the volume and subvolumes
     """
+    config = kw.get("config")
+    rados_obj, crash_start_time = init_cluster_health_check(ceph_cluster, config)
+    clients = []
     try:
         global common_util, attr_util, fscrypt_util
         fs_util = FsUtils(ceph_cluster)
@@ -1609,7 +1616,6 @@ def run(ceph_cluster, **kw):
         clients = ceph_cluster.get_ceph_objects("client")
         default_fs = "cephfs"
         nfs_servers = ceph_cluster.get_ceph_objects("nfs")
-        config = kw.get("config")
         build = config.get("rhbuild")
         cg_snap_util = CG_Snap_Utils(ceph_cluster)
         cg_snap_io = CG_snap_IO(ceph_cluster)
@@ -1732,10 +1738,15 @@ def run(ceph_cluster, **kw):
         log.error(e)
         return 1
     finally:
+        crash_detected = log_cluster_health_and_check_crashes(
+            rados_obj, crash_start_time
+        )
         log.info("Upgrade all clients")
         for client in clients:
             cmd = "yum upgrade -y --nogpgcheck ceph-common ceph-fuse"
             client.exec_command(sudo=True, cmd=cmd)
+        if crash_detected:
+            return 1
 
 
 # HELPER ROUTINES

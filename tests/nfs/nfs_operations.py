@@ -1410,9 +1410,14 @@ def wait_for_nfs_and_mount(
 
     Intended for upgrade scenarios where ``cephadm upgrade`` restarts
     NFS-Ganesha and plain ``mount -t nfs`` can block for many minutes.
+
+    Fail-fast is enforced via the cephci command ``timeout`` (default
+    ``mount_timeout``), not via NFS ``-o mounttimeout`` which mount.nfs
+    rejects on RHEL.
     """
+    # Drop legacy mounttimeout so it is not forwarded as an NFS -o option.
+    kwargs.pop("mounttimeout", None)
     mount_kwargs = {
-        "mounttimeout": kwargs.pop("mounttimeout", 60),
         "timeo": kwargs.pop("timeo", 30),
         "retrans": kwargs.pop("retrans", 2),
         "timeout": kwargs.pop("timeout", mount_timeout),

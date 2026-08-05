@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_utilsV1 import FsUtils
+from tests.cephfs.lib.cephfs_cluster_health import (
+    init_cluster_health_check,
+    log_cluster_health_and_check_crashes,
+)
 from utility.log import Log
 from utility.retry import retry
 
@@ -22,9 +26,12 @@ def run(ceph_cluster, **kw):
     1. Client machine with root access.
     2. Directory path where the filesystem is mounted
     """
+    config = kw.get("config")
+    rados_obj, crash_start_time = init_cluster_health_check(ceph_cluster, config)
+    run_start_time = None
+    stats = None
     try:
         fs_util = FsUtils(ceph_cluster)
-        config = kw.get("config")
 
         clients = ceph_cluster.get_ceph_objects("client")
         timeout = config.get("timeout", 1800)
@@ -99,22 +106,27 @@ def run(ceph_cluster, **kw):
         log.error(traceback.format_exc())
         return 1
     finally:
-        run_end_time = datetime.now()
-        duration = divmod((run_end_time - run_start_time).total_seconds(), 60)
-        log.info(
-            "---------------------------------------------------------------------"
-        )
-        log.info("Test Summary")
-        log.info(
-            "---------------------------------------------------------------------"
-        )
-        log.info(f"Total Duration: {int(duration[0])} mins, {int(duration[1])} secs")
-        log.info(f"Total Iterations: {stats['total_iterations']}")
-        log.info(f"Total no of smallfile executions: {stats['smallfile']}")
-        log.info(f"Total no of DD executions: {stats['dd']}")
-        log.info(
-            "---------------------------------------------------------------------"
-        )
+        if run_start_time is not None and stats is not None:
+            run_end_time = datetime.now()
+            duration = divmod((run_end_time - run_start_time).total_seconds(), 60)
+            log.info(
+                "---------------------------------------------------------------------"
+            )
+            log.info("Test Summary")
+            log.info(
+                "---------------------------------------------------------------------"
+            )
+            log.info(
+                f"Total Duration: {int(duration[0])} mins, {int(duration[1])} secs"
+            )
+            log.info(f"Total Iterations: {stats['total_iterations']}")
+            log.info(f"Total no of smallfile executions: {stats['smallfile']}")
+            log.info(f"Total no of DD executions: {stats['dd']}")
+            log.info(
+                "---------------------------------------------------------------------"
+            )
+        if log_cluster_health_and_check_crashes(rados_obj, crash_start_time):
+            return 1
 
 
 @retry(CommandFailed, tries=3, delay=30)
