@@ -84,6 +84,22 @@ def run(ceph_cluster, **kw):
             log.error("Error reading one or both CSV files. Exiting.")
             return 1
 
+        if not result_v_n_1:
+            log.error(
+                "Pre-upgrade/result CSV %s has no snapshot sync rows. "
+                "Cannot validate snapdiff performance.",
+                csv_file_v_n_1,
+            )
+            return 1
+
+        if not result_v_n:
+            log.error(
+                "Post-upgrade/result CSV %s has no snapshot sync rows. "
+                "Post-upgrade snapdiff likely failed before collecting results.",
+                csv_file_v_n,
+            )
+            return 1
+
         compare_sync_duration(result_v_n_1, result_v_n)
         log.info("Validation completed successfully.")
 

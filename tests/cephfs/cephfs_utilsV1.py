@@ -1248,6 +1248,20 @@ class FsUtils(object):
                     f"Creation of NFS cluster: {nfs_cluster_name} failed"
                 )
 
+            # Cluster appearing in ls is not enough; wait until the NFS daemon is running.
+            # Otherwise mounts fail with Connection refused while orch still shows 0/1 stopped.
+            timeout = kwargs.get("nfs_daemon_timeout", 180)
+            if not self.wait_for_nfs_process(
+                client,
+                nfs_cluster_name,
+                timeout=timeout,
+                desired_state="running",
+            ):
+                raise CommandFailed(
+                    f"NFS cluster {nfs_cluster_name} was created but daemon did not "
+                    f"reach running state within {timeout}s"
+                )
+
         return cmd_out
 
     @function_execution_time
