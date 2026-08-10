@@ -333,7 +333,6 @@ tests:
       desc: "Check for Crash"
       module: cephfs_crash_util.py
       name: cephfs-crash-check
-      comments: Known issue IBMCEPH-17181
       clusters:
         ceph1:
           config:
