@@ -913,7 +913,18 @@ class FsUtils(object):
                 cmd="ceph orch ps --daemon_type=nfs --format json",
                 check_ec=False,
             )
-            nfs_hosts = json.loads(out.read().decode())
+            if not out or not str(out).strip():
+                sleep(interval)
+                continue
+            try:
+                nfs_hosts = json.loads(out)
+            except (TypeError, json.JSONDecodeError) as e:
+                log.warning("Unable to parse NFS orch ps output: %s", e)
+                sleep(interval)
+                continue
+            if not isinstance(nfs_hosts, list):
+                sleep(interval)
+                continue
             for nfs in nfs_hosts:
                 log.info(nfs)
                 if process_name in nfs["daemon_id"] and ispresent:
