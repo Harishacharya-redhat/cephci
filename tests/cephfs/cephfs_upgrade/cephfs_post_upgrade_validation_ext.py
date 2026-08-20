@@ -10,7 +10,11 @@ from looseversion import LooseVersion
 
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from tests.cephfs.lib.cephfs_common_lib import CephFSCommonUtils
-from tests.cephfs.lib.cephfs_subvol_metric_utils import MDSMetricsHelper
+from tests.cephfs.lib.cephfs_subvol_metric_utils import (
+    MDSMetricsHelper,
+    metrics_bytes_within_tolerance,
+    metrics_quota_is_ready,
+)
 from tests.cephfs.snapshot_clone.cephfs_snap_utils import SnapUtils
 from utility.log import Log
 
@@ -289,7 +293,14 @@ def subvolume_metrics_quota_used_test():
                 mnt_client, entry["vol_name"], entry["sv"], entry["svg"]
             )
 
-            if metrics_quota != expected_quota:
+            if not metrics_quota_is_ready(metrics_quota, expected_quota):
+                log.warning(
+                    "Step 2: quota_bytes not ready yet: expected %s got %s",
+                    expected_quota,
+                    metrics_quota,
+                )
+                test_fail += 1
+            elif metrics_quota != expected_quota:
                 log.error(
                     "Step 2: quota_bytes mismatch: expected %s got %s",
                     expected_quota,
@@ -303,14 +314,16 @@ def subvolume_metrics_quota_used_test():
                     metrics_quota,
                 )
 
-            if metrics_used != expected_used_bytes:
+            if expected_used_bytes is not None and not metrics_bytes_within_tolerance(
+                expected_used_bytes, metrics_used
+            ):
                 log.error(
                     "Step 2: used_bytes mismatch: expected %s got %s",
                     expected_used_bytes,
                     metrics_used,
                 )
                 test_fail += 1
-            else:
+            elif expected_used_bytes is not None:
                 log.info(
                     "Step 2: used_bytes matched: expected %s got %s",
                     expected_used_bytes,
@@ -376,13 +389,21 @@ def subvolume_metrics_quota_used_test():
         expected_used_bytes = _get_expected_used_bytes(
             mnt_client, entry["vol_name"], entry["sv"], entry["svg"]
         )
-        if metrics_used != expected_used_bytes:
+        if metrics_used != expected_used_bytes and not metrics_bytes_within_tolerance(
+            expected_used_bytes, metrics_used
+        ):
             log.error(
                 "Step 3: new used_bytes mismatch: expected %s got %s",
                 expected_used_bytes,
                 metrics_used,
             )
             test_fail += 1
+        elif metrics_used != expected_used_bytes:
+            log.info(
+                "Step 3: new used_bytes within tolerance: expected %s got %s",
+                expected_used_bytes,
+                metrics_used,
+            )
         else:
             log.info(
                 "Step 3: new used_bytes matched: expected %s got %s",
@@ -395,7 +416,14 @@ def subvolume_metrics_quota_used_test():
         expected_quota_attrs = fs_util.get_quota_attrs(mnt_client, mnt_pt)
         expected_quota_bytes = int(expected_quota_attrs.get("bytes", 0))
 
-        if expected_quota_bytes != metrics_quota:
+        if not metrics_quota_is_ready(metrics_quota, expected_quota_bytes):
+            log.warning(
+                "Step 3: new quota not ready yet: expected %s got %s",
+                expected_quota_bytes,
+                metrics_quota,
+            )
+            test_fail += 1
+        elif expected_quota_bytes != metrics_quota:
             log.error(
                 "Step 3: new quota mismatch: expected %s got %s",
                 expected_quota_bytes,

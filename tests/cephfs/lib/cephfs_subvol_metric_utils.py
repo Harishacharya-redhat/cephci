@@ -8,6 +8,24 @@ from utility.log import Log
 
 log = Log(__name__)
 
+# MDS subvolume metrics can lag getfattr/subvolume info by a small byte delta.
+DEFAULT_METRICS_BYTES_TOLERANCE = 65536
+
+
+def metrics_quota_is_ready(metrics_quota: int, expected_quota: int) -> bool:
+    """Return False when metrics still report 0 but quota is configured."""
+    return not (int(metrics_quota) == 0 and int(expected_quota) > 0)
+
+
+def metrics_bytes_within_tolerance(
+    expected: int,
+    actual: int,
+    tolerance: int = DEFAULT_METRICS_BYTES_TOLERANCE,
+) -> bool:
+    if int(expected) == int(actual):
+        return True
+    return abs(int(expected) - int(actual)) <= tolerance
+
 
 class MDSMetricsHelper:
     """

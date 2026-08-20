@@ -55,6 +55,11 @@ class CephFSCommonUtils(FsUtils):
             "Slow OSD heartbeats",
             "stray daemon(s) not managed by cephadm",
             "CALL_HOME_ENABLED_AUTOMATICALLY",
+            # Post-upgrade AUTH_INSECURE_CLIENT_KEY_TYPE warnings (Ceph 9.x)
+            "auth client entities with insecure key types",
+            "allow auth using insecure key types",
+            "allow creation of insecure key types",
+            "rotating auth service keys using insecure key types",
         ]
         non_accepted_list = ["OSD_DOWN", "OSD_HOST_DOWN"]
         while ceph_healthy == 0 and (datetime.datetime.now() < end_time):

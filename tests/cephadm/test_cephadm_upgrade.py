@@ -133,8 +133,11 @@ def run(ceph_cluster, **kwargs) -> int:
 
         orch.start_upgrade(config)
 
-        # Monitor upgrade status, till completion
-        orch.monitor_upgrade_status()
+        # Monitor upgrade status, till completion.
+        # Prefer explicit upgrade_timeout; fall back to parallel max_time when set.
+        upgrade_timeout = int(config.get("upgrade_timeout", config.get("max_time", 3600)))
+        log.info("Monitoring upgrade status with timeout=%s seconds", upgrade_timeout)
+        orch.monitor_upgrade_status(timeout=upgrade_timeout)
 
         # IBM Storage Ceph 9.1 and greater would require license acceptance
         if product == "ibm" and LooseVersion(
