@@ -8,11 +8,14 @@ from cli.utilities.filesys import MountFailedError, Unmount
 from tests.ceph_ansible.purge_cluster import reboot_node
 from tests.nfs.byok.byok_tools import (
     clean_up_gklm,
+    collect_byok_nfs_logs,
+    collect_gklm_logs_on_failure,
     create_in_file_certs,
     get_enctag,
     load_gklm_config,
     perform_io_operations_and_validate_fuse,
     setup_gklm_infrastructure,
+    wait_after_ganesha_create,
 )
 from tests.nfs.nfs_operations import (
     dynamic_cleanup_common_names,
@@ -161,6 +164,7 @@ def run(ceph_cluster, **kw):
     gkml_client_name = "automation"
     gklm_cert_alias = "cert2"
     client_export_mount_dict = None
+    test_failed = True
 
     try:
         log.info("Step 1: Setting up GKLM infrastructure")
@@ -247,6 +251,7 @@ def run(ceph_cluster, **kw):
             enctag=enctag,
             **kmip_config,
         )
+        wait_after_ganesha_create()
 
         # log.info("Step 6: Identifying active NFS node in HA setup")
         # active_nfs_node = get_active_node_ha(clients[0], nfs_name, nfs_servers)
@@ -304,14 +309,19 @@ def run(ceph_cluster, **kw):
             dd_command_size_in_M=10,
         )
 
+        test_failed = False
         return 0
     except MountFailedError:
         if operation == "correct_incorrect_key":
             log.info("Expected failure occurred during I/O with incorrect key scenario")
+            test_failed = False
             return 0
 
     finally:
         log.info("Step 9: Cleanup - GKLM, NFS clusters, and mounts")
+        collect_byok_nfs_logs(clients[0], nfs_servers, nfs_name)
+        if test_failed:
+            collect_gklm_logs_on_failure(gklm_params)
 
         # Clean GKLM resources
         clean_up_gklm(

@@ -1,4 +1,7 @@
 import json
+import logging
+import os
+import shlex
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +11,7 @@ import yaml
 
 from ceph.waiter import WaitUntil
 from cli.ceph.ceph import Ceph
+from cli.connectible.remote import Remote
 from cli.exceptions import ConfigError
 from tests.nfs.nfs_operations import (
     _LiteralPemDumper,
@@ -15,6 +19,7 @@ from tests.nfs.nfs_operations import (
     create_nfs_via_file_and_verify,
     fuse_mount_retry,
     log,
+    nfs_log_parser,
 )
 from tests.nfs.test_nfs_multiple_operations_for_upgrade import (
     create_file,
@@ -26,9 +31,172 @@ from tests.nfs.test_nfs_multiple_operations_for_upgrade import (
 )
 from utility.gklm_client.gklm_client import build_gklm_client
 
-# GKLM needs wall-clock settle time after NFS apply/SIGHUP before KMIP certs
-# are queryable via REST. Prefer a named wait over an opaque magic sleep.
-_GKLM_CERT_SETTLE_SEC = 30
+# NFS-Ganesha needs wall-clock settle time after orch apply before KMIP/exports.
+# Prefer a named wait over an opaque magic sleep.
+_GANESHA_CREATE_SETTLE_SEC = 60
+
+
+def wait_after_ganesha_create():
+    """Wait after NFS-Ganesha create so KMIP and exports can settle."""
+    log.info(
+        "Waiting %ss after NFS Ganesha create before continuing BYOK operations",
+        _GANESHA_CREATE_SETTLE_SEC,
+    )
+    time.sleep(_GANESHA_CREATE_SETTLE_SEC)
+
+
+def collect_byok_nfs_logs(client, nfs_nodes, nfs_names):
+    """
+    Collect NFS-Ganesha container logs and conf via nfs_log_parser.
+
+    Call this from BYOK test ``finally`` blocks before teardown so failures
+    remain diagnosable. Collection is non-fatal and must not mask the original
+    test result or skip remaining cleanup.
+
+    Args:
+        client: Client node used for ``ceph orch`` commands.
+        nfs_nodes: NFS node object or list of NFS nodes hosting Ganesha.
+        nfs_names: NFS cluster name or list of cluster names to parse.
+    """
+    if client is None or nfs_nodes is None:
+        log.warning("Skipping nfs_log_parser; client or NFS nodes not initialized")
+        return
+    if not isinstance(nfs_names, (list, tuple)):
+        nfs_names = [nfs_names]
+    for nfs_name in nfs_names:
+        if not nfs_name:
+            continue
+        try:
+            log.info(
+                "Collecting NFS logs via nfs_log_parser for cluster '%s'", nfs_name
+            )
+            nfs_log_parser(client=client, nfs_node=nfs_nodes, nfs_name=nfs_name)
+        except Exception as ex:
+            log.warning(
+                "nfs_log_parser failed for cluster '%s' (non-fatal): %s",
+                nfs_name,
+                ex,
+            )
+
+
+# IBM GKLM 5.x default WAS_HOME on Linux (Fix Pack README / Support Matrix).
+# Product logs: <WAS_HOME>/products/sklm/logs/{sklm.log,debug,agent.log}
+# Audit:        <WAS_HOME>/products/sklm/logs/audit/sklm_audit.log
+# Liberty:      <WAS_HOME>/usr/servers/<server>/logs/{messages.log,console.log}
+# https://www.ibm.com/support/pages/ibm-guardium-key-lifecycle-manager-support-matrix
+# https://www.ibm.com/support/pages/ibm-guardium-key-lifecycle-manager-version-500-fix-pack-3-readme
+_GKLM_WAS_HOME_DEFAULT = "/opt/IBM/WebSphere/Liberty"
+_GKLM_LOG_TAIL_LINES = 250
+
+
+def _cephci_run_log_dir():
+    """Directory of the current cephci test log file, if a FileHandler exists."""
+    try:
+        for handler in logging.getLogger("cephci").handlers:
+            path = getattr(handler, "baseFilename", None)
+            if path:
+                return os.path.dirname(os.path.abspath(path))
+    except Exception:
+        pass
+    return log.log_dir
+
+
+def collect_gklm_logs_on_failure(gklm_params, tail_lines=_GKLM_LOG_TAIL_LINES):
+    """
+    SSH to the GKLM 5.x host and dump recent product/Liberty logs into cephci logs.
+
+    Call from BYOK ``finally`` only when the test failed. Collection is non-fatal
+    so cleanup still runs. IBM GUI equivalent is Configuration → Audit and Debug
+    → Download log files (Getting Started Guide); this helper reads the same
+    on-disk locations over SSH.
+
+    Args:
+        gklm_params (dict): Output of ``load_gklm_config`` (or equivalent).
+        tail_lines (int): Lines to capture from each log file.
+    """
+    if not gklm_params:
+        log.warning("Skipping GKLM log collection; GKLM params not initialized")
+        return
+
+    host = gklm_params.get("gklm_ip") or gklm_params.get("gklm_hostname")
+    username = gklm_params.get("gklm_node_username") or gklm_params.get(
+        "gklm_node_user"
+    )
+    password = gklm_params.get("gklm_node_password")
+    was_home = gklm_params.get("gklm_was_home") or _GKLM_WAS_HOME_DEFAULT
+    hostname = gklm_params.get("gklm_hostname") or host
+
+    if not host or not username or not password:
+        log.warning(
+            "Skipping GKLM log collection; missing SSH host/user/password in GKLM params"
+        )
+        return
+
+    log.info(
+        "Collecting GKLM 5.x logs from %s (%s) WAS_HOME=%s (last %s lines per file)",
+        host,
+        hostname,
+        was_home,
+        tail_lines,
+    )
+
+    quoted_home = shlex.quote(was_home)
+    remote_cmd = (
+        f"WAS_HOME={quoted_home}; "
+        f"N={int(tail_lines)}; "
+        'echo "=== GKLM log directory listing ==="; '
+        'ls -la "$WAS_HOME/products/sklm/logs" '
+        '"$WAS_HOME/products/sklm/logs/audit" '
+        '"$WAS_HOME/products/sklm/logs/replication" '
+        "$WAS_HOME/usr/servers/*/logs 2>/dev/null || true; "
+        "for f in "
+        '"$WAS_HOME/products/sklm/logs/sklm.log" '
+        '"$WAS_HOME/products/sklm/logs/debug" '
+        '"$WAS_HOME/products/sklm/logs/debug.log" '
+        '"$WAS_HOME/products/sklm/logs/agent.log" '
+        '"$WAS_HOME/products/sklm/logs/audit/sklm_audit.log"; do '
+        '  if [ -f "$f" ]; then '
+        '    echo ""; echo "===== tail -n $N $f ====="; tail -n "$N" "$f"; '
+        "  fi; "
+        "done; "
+        "for f in $WAS_HOME/usr/servers/*/logs/messages.log "
+        "$WAS_HOME/usr/servers/*/logs/console.log; do "
+        '  if [ -f "$f" ]; then '
+        '    echo ""; echo "===== tail -n $N $f ====="; tail -n "$N" "$f"; '
+        "  fi; "
+        "done"
+    )
+
+    remote = None
+    try:
+        remote = Remote(host=host, username=username, password=password)
+        stdout, stderr = remote.run(cmd=remote_cmd, timeout=180)
+        banner = (
+            f"========== GKLM 5.x logs (test failure) "
+            f"host={hostname} ip={host} =========="
+        )
+        log.info("%s\n%s", banner, stdout or "(no GKLM log content returned)")
+        if stderr:
+            log.warning("GKLM log collection stderr: %s", stderr)
+
+        run_dir = _cephci_run_log_dir()
+        if run_dir and stdout:
+            dest_dir = os.path.join(run_dir, "gklm_logs")
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, f"gklm-{hostname}-failure.log")
+            with open(dest, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(stdout)
+                if not stdout.endswith("\n"):
+                    fh.write("\n")
+            log.info("Wrote GKLM logs to %s", dest)
+    except Exception as ex:
+        log.warning("GKLM log collection failed (non-fatal): %s", ex)
+    finally:
+        if remote is not None:
+            try:
+                remote._client.close()
+            except Exception:
+                pass
 
 
 def is_gklm_auth_error(exc) -> bool:
@@ -323,13 +491,7 @@ def create_nfs_instance_for_byok(
         nfs_nodes=[nfs_node],
     )
     log.info("NFS Ganesha BYOK service creation successful")
-    # Allow GKLM time to parse/register the KMIP certificates after apply/SIGHUP.
-    # These create helpers do not receive a GKLM client/alias to poll against.
-    log.info(
-        "Waiting %ss for GKLM to parse certificates after BYOK NFS cluster create/update",
-        _GKLM_CERT_SETTLE_SEC,
-    )
-    time.sleep(_GKLM_CERT_SETTLE_SEC)
+    wait_after_ganesha_create()
 
 
 def setup_gklm_infrastructure(nfs_nodes, gklm_ip, gklm_hostname):
@@ -579,6 +741,7 @@ def load_gklm_config(custom_data, config, cephci_data):
                         "gklm_node_password",
                         "gklm_hostname",
                         "gklm_rest_prefix",
+                        "gklm_was_home",
                     }
                     for k in gklm_yaml_keys:
                         if k in raw and raw[k] not in ("", None):
@@ -611,6 +774,7 @@ def load_gklm_config(custom_data, config, cephci_data):
             "gklm_node_password",
             "gklm_hostname",
             "gklm_rest_prefix",
+            "gklm_was_home",
         }:
             merged[key] = val
             log.info("Overrode GKLM config '%s' via custom-config: %s", key, val)
@@ -636,7 +800,8 @@ def load_gklm_config(custom_data, config, cephci_data):
     log.info(
         "Final GKLM configuration keys: %s",
         [k for k in required if k in merged]
-        + (["gklm_rest_prefix"] if merged.get("gklm_rest_prefix") else []),
+        + (["gklm_rest_prefix"] if merged.get("gklm_rest_prefix") else [])
+        + (["gklm_was_home"] if merged.get("gklm_was_home") else []),
     )
     return merged
 
@@ -796,13 +961,7 @@ def create_multiple_nfs_instance_for_byok(
                 f"Successfully created {replication_number} BYOK-enabled "
                 f"NFS Ganesha instance(s) using base service_id '{spec.get('service_id')}'"
             )
-            # Allow GKLM time to parse/register the KMIP certificates after apply.
-            # These create helpers do not receive a GKLM client/alias to poll against.
-            log.info(
-                "Waiting %ss for GKLM to parse certificates after multi BYOK NFS create",
-                _GKLM_CERT_SETTLE_SEC,
-            )
-            time.sleep(_GKLM_CERT_SETTLE_SEC)
+            wait_after_ganesha_create()
             return result
         log.error(" Failed to create BYOK-enabled NFS Ganesha instances.")
         return 1
