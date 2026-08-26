@@ -66,6 +66,11 @@ def run(ceph_cluster, **kw):
        7. Mount 7: kernel Client_4
        8. Mount 8: Fuse Client_4
     6. Perform below operations on Above mounts on both Virtual Machines
+    7. Test 4 follows IBMCEPH-9219 comment 240589:
+       - chown 1000:1000 and chmod 755 on /volumes in cephfs_1
+       - kernel and fuse mount :/volumes for client_3 and client_4 on cephfs_1
+       - mkdir inside /volumes is allowed (path=/volumes overrides root_squash)
+       - mkdir at cephfs_1 root is denied for both clients (original bug)
     """
     try:
         tc = "CEPH-83591419"
@@ -331,12 +336,22 @@ def run(ceph_cluster, **kw):
                 new_client_hostname="client_2",
                 extra_params=f" --client_fs {fs_list[0]}",
             )
-            fs_util.fuse_mount(
-                [client],
-                "/mnt/client_root_squash_Scenario_3_1",
-                new_client_hostname="client_2",
-                extra_params=f" --client_fs {fs_list[1]}",
-            )
+            scenario_3_fs2_fuse = False
+            try:
+                fs_util.fuse_mount(
+                    [client],
+                    "/mnt/client_root_squash_Scenario_3_1",
+                    new_client_hostname="client_2",
+                    extra_params=f" --client_fs {fs_list[1]}",
+                )
+                scenario_3_fs2_fuse = True
+            except CommandFailed as err:
+                log.info(
+                    "Fuse mount of %s with client_2 failed as expected "
+                    "(client_2 has no MDS caps for that FS): %s",
+                    fs_list[1],
+                    err,
+                )
             fs_util.kernel_mount(
                 [client1],
                 "/mnt/client_root_squash_Scenario_3",
@@ -344,13 +359,23 @@ def run(ceph_cluster, **kw):
                 new_client_hostname="client_2",
                 extra_params=f",fs={fs_list[0]}",
             )
-            fs_util.kernel_mount(
-                [client1],
-                "/mnt/client_root_squash_Scenario_3_1",
-                ",".join(mon_node_ips),
-                new_client_hostname="client_2",
-                extra_params=f",fs={fs_list[1]}",
-            )
+            scenario_3_fs2_kernel = False
+            try:
+                fs_util.kernel_mount(
+                    [client1],
+                    "/mnt/client_root_squash_Scenario_3_1",
+                    ",".join(mon_node_ips),
+                    new_client_hostname="client_2",
+                    extra_params=f",fs={fs_list[1]}",
+                )
+                scenario_3_fs2_kernel = True
+            except CommandFailed as err:
+                log.info(
+                    "Kernel mount of %s with client_2 failed as expected "
+                    "(client_2 has no MDS caps for that FS): %s",
+                    fs_list[1],
+                    err,
+                )
             for cl in [client, client1]:
                 validate_file_dir(
                     cl,
@@ -358,19 +383,95 @@ def run(ceph_cluster, **kw):
                     file_name="test_scenario_3",
                     allowed=False,
                 )
-                validate_file_dir(
-                    cl,
-                    path="/mnt/client_root_squash_Scenario_3_1",
-                    file_name="test_scenario_3_1",
-                    allowed=False,
+                fs2_mounted = (
+                    scenario_3_fs2_fuse if cl is client else scenario_3_fs2_kernel
                 )
-            log.info(
-                "NOTE: *******Change the allowed flag based on BZ : 2293943********"
-            )
+                if fs2_mounted:
+                    validate_file_dir(
+                        cl,
+                        path="/mnt/client_root_squash_Scenario_3_1",
+                        file_name="test_scenario_3_1",
+                        allowed=False,
+                    )
 
             log.info(
-                "Test 4: Create a client with 2 file system with 1 enabling root_squash and other without root_squash"
+                "Test 4: IBMCEPH-9219 / BZ-2293943 — client_3 (single FS) and "
+                "client_4 (multi-FS) with root_squash + path=/volumes. Steps from "
+                "IBMCEPH-9219 comment 240589; expected results from comment 240785 "
+                "and https://docs.ceph.com/en/latest/cephfs/client-auth/#root-squash"
             )
+            client.exec_command(
+                sudo=True, cmd=f"mkdir -p {fuse_mount_dir}/volumes"
+            )
+            client.exec_command(
+                sudo=True, cmd=f"chown 1000:1000 {fuse_mount_dir}/volumes"
+            )
+            client.exec_command(
+                sudo=True, cmd=f"chmod 755 {fuse_mount_dir}/volumes"
+            )
+            vol_stat, _ = client.exec_command(
+                sudo=True, cmd=f"stat -c '%u:%g %a' {fuse_mount_dir}/volumes"
+            )
+            log.info("/volumes ownership/mode on %s: %s", fs_list[0], vol_stat.strip())
+
+            # Kernel mount :/volumes on cephfs_1 for both clients (comment 240589)
+            fs_util.kernel_mount(
+                [client1],
+                "/mnt/client_root_squash_Scenario_4_client_3",
+                ",".join(mon_node_ips),
+                new_client_hostname="client_3",
+                sub_dir="/volumes",
+                extra_params=f",fs={fs_list[0]}",
+            )
+            fs_util.kernel_mount(
+                [client1],
+                "/mnt/client_root_squash_Scenario_4_client_4",
+                ",".join(mon_node_ips),
+                new_client_hostname="client_4",
+                sub_dir="/volumes",
+                extra_params=f",fs={fs_list[0]}",
+            )
+            # Fuse equivalent of :/volumes (comment 240785)
+            fs_util.fuse_mount(
+                [client],
+                "/mnt/client_root_squash_Scenario_4_client_3",
+                new_client_hostname="client_3",
+                extra_params=f" -r /volumes --client_fs {fs_list[0]}",
+            )
+            fs_util.fuse_mount(
+                [client],
+                "/mnt/client_root_squash_Scenario_4_client_4",
+                new_client_hostname="client_4",
+                extra_params=f" -r /volumes --client_fs {fs_list[0]}",
+            )
+            for cl in [client, client1]:
+                validate_file_dir(
+                    cl,
+                    path="/mnt/client_root_squash_Scenario_4_client_3",
+                    file_name="test_3",
+                )
+                validate_file_dir(
+                    cl,
+                    path="/mnt/client_root_squash_Scenario_4_client_4",
+                    file_name="test_4",
+                )
+                cl.exec_command(
+                    sudo=True,
+                    cmd="touch /mnt/client_root_squash_Scenario_4_client_3/file_3 "
+                    "/mnt/client_root_squash_Scenario_4_client_4/file_4",
+                )
+                ls_out, _ = cl.exec_command(
+                    sudo=True,
+                    cmd="ls -ln /mnt/client_root_squash_Scenario_4_client_3/file_3 "
+                    "/mnt/client_root_squash_Scenario_4_client_4/file_4",
+                )
+                log.info(
+                    "Ownership of files created as root inside /volumes (path cap "
+                    "overrides squash, UID 0 is expected):\n%s",
+                    ls_out,
+                )
+
+            # Original bug: both clients mounted on cephfs_1 root must honor squash
             fs_util.fuse_mount(
                 [client],
                 "/mnt/client_root_squash_Scenario_4",
@@ -381,7 +482,7 @@ def run(ceph_cluster, **kw):
                 [client],
                 "/mnt/client_root_squash_Scenario_4_1",
                 new_client_hostname="client_4",
-                extra_params=f" --client_fs {fs_list[1]}",
+                extra_params=f" --client_fs {fs_list[0]}",
             )
             fs_util.kernel_mount(
                 [client1],
@@ -395,7 +496,7 @@ def run(ceph_cluster, **kw):
                 "/mnt/client_root_squash_Scenario_4_1",
                 ",".join(mon_node_ips),
                 new_client_hostname="client_4",
-                extra_params=f",fs={fs_list[1]}",
+                extra_params=f",fs={fs_list[0]}",
             )
             for cl in [client, client1]:
                 validate_file_dir(
@@ -406,8 +507,40 @@ def run(ceph_cluster, **kw):
                 )
                 validate_file_dir(
                     cl,
-                    path="/mnt/client_root_squash_Scenario_4_1/volumes/",
-                    file_name="test_scenario_4_1",
+                    path="/mnt/client_root_squash_Scenario_4_1",
+                    file_name="test_scenario_4_root",
+                    allowed=False,
+                )
+                validate_file_dir(
+                    cl,
+                    path="/mnt/client_root_squash_Scenario_4/volumes",
+                    file_name="test_scenario_4_vol",
+                )
+                validate_file_dir(
+                    cl,
+                    path="/mnt/client_root_squash_Scenario_4_1/volumes",
+                    file_name="test_scenario_4_vol",
+                )
+
+            # client_4 on cephfs_2 has no root_squash; writes must succeed
+            fs_util.fuse_mount(
+                [client],
+                "/mnt/client_root_squash_Scenario_4_fs2",
+                new_client_hostname="client_4",
+                extra_params=f" --client_fs {fs_list[1]}",
+            )
+            fs_util.kernel_mount(
+                [client1],
+                "/mnt/client_root_squash_Scenario_4_fs2",
+                ",".join(mon_node_ips),
+                new_client_hostname="client_4",
+                extra_params=f",fs={fs_list[1]}",
+            )
+            for cl in [client, client1]:
+                validate_file_dir(
+                    cl,
+                    path="/mnt/client_root_squash_Scenario_4_fs2",
+                    file_name="test_scenario_4_fs2",
                 )
 
             log.info(
