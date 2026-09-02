@@ -112,6 +112,13 @@ tests:
       module: test_client.py
       name: configure client
   - test:
+      name: Capture monitor auth cipher baseline before upgrade
+      desc: Save mon auth_allowed_ciphers policy before upgrade (IBMCEPH-17962)
+      module: test_mon_auth_cipher_post_upgrade.py
+      abort-on-fail: true
+      config:
+        phase: capture
+  - test:
       name: Upgrade cluster to latest 9.x ceph version
       desc: Upgrade cluster to latest version
       module: test_cephadm_upgrade.py
@@ -124,6 +131,13 @@ tests:
         verify_cluster_health: true
       destroy-cluster: false
       abort-on-fail: true
+  - test:
+      name: Validate monitor auth cipher policy after upgrade
+      desc: Ensure upgrade did not add legacy aes cipher (IBMCEPH-17962)
+      module: test_mon_auth_cipher_post_upgrade.py
+      abort-on-fail: true
+      config:
+        phase: validate
   - test:
       name: Executes RGW, RBD and FS operations
       desc: Run object, block and filesystem basic operations parallelly.
