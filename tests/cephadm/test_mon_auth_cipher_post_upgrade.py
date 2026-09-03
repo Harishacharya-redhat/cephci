@@ -23,15 +23,25 @@ INSECURE_AUTH_HEALTH_CODES = (
 LEGACY_AES_CIPHER = "aes"
 
 
+def _normalize_cipher_token(value):
+    """Return a cipher name from mon dump JSON (string or {name: ...} object)."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value.get("name") or value.get("cipher")
+    token = str(value).strip()
+    return token or None
+
+
 def _normalize_cipher_list(value):
     """Return a sorted list of cipher tokens from mon dump output."""
     if value is None:
         return []
     if isinstance(value, list):
-        tokens = value
+        tokens = [_normalize_cipher_token(item) for item in value]
     else:
-        tokens = str(value).replace(",", " ").split()
-    return sorted({token.strip() for token in tokens if token.strip()})
+        tokens = [_normalize_cipher_token(item) for item in str(value).replace(",", " ").split()]
+    return sorted({token for token in tokens if token})
 
 
 def _run_shell(installer, cmd):
@@ -45,11 +55,15 @@ def _get_mon_auth_policy(installer):
     """Collect auth cipher fields from ``ceph mon dump --format json``."""
     mon_dump = loads(_run_shell(installer, "ceph mon dump --format json"))
     policy = {
-        "auth_service_cipher": mon_dump.get("auth_service_cipher"),
+        "auth_service_cipher": _normalize_cipher_token(
+            mon_dump.get("auth_service_cipher")
+        ),
         "auth_allowed_ciphers": _normalize_cipher_list(
             mon_dump.get("auth_allowed_ciphers")
         ),
-        "auth_preferred_cipher": mon_dump.get("auth_preferred_cipher"),
+        "auth_preferred_cipher": _normalize_cipher_token(
+            mon_dump.get("auth_preferred_cipher")
+        ),
     }
     log.info("Monitor auth cipher policy: %s", policy)
     return policy
@@ -71,8 +85,14 @@ def _read_baseline(installer, state_file):
             f"Missing baseline file {state_file}. Run capture phase before upgrade."
         ) from exc
     baseline = json.loads(out)
+    baseline["auth_service_cipher"] = _normalize_cipher_token(
+        baseline.get("auth_service_cipher")
+    )
     baseline["auth_allowed_ciphers"] = _normalize_cipher_list(
         baseline.get("auth_allowed_ciphers")
+    )
+    baseline["auth_preferred_cipher"] = _normalize_cipher_token(
+        baseline.get("auth_preferred_cipher")
     )
     return baseline
 
