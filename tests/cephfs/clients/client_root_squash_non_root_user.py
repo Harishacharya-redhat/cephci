@@ -62,6 +62,8 @@ def run(ceph_cluster, **kw):
         fs_details = fs_util.get_fs_info(clients[0], fs1)
         if not fs_details:
             fs_util.create_fs(clients[0], fs1)
+        if not fs_util.wait_for_mds_process(clients[0], fs1, timeout=300):
+            raise CommandFailed(f"MDS for {fs1} did not reach running state")
         fuse_mount_dir = "/mnt/fuse_" + "".join(
             secrets.choice(string.ascii_uppercase + string.digits) for i in range(5)
         )
@@ -96,8 +98,11 @@ def run(ceph_cluster, **kw):
         fuse_mounting_dir_1 = f"/home/cephuser/cephfs_fuse{mounting_dir}_1/"
         mon_node_ips = fs_util.get_mon_node_ips()
         client1.exec_command(cmd=f"mkdir -p {fuse_mounting_dir_1}")
-        client1.exec_command(
-            cmd=f"sudo ceph-fuse -n client.{ceph_client_name} {fuse_mounting_dir_1} --client_fs {fs1}",
+        fs_util.fuse_mount(
+            [client1],
+            fuse_mounting_dir_1,
+            new_client_hostname=ceph_client_name,
+            extra_params=f" --client_fs {fs1}",
         )
         client1.exec_command(cmd=f"mkdir -p {kernel_mounting_dir_1}")
         fs_util.kernel_mount(
