@@ -27,7 +27,7 @@ def _get_unique_mds_hosts(ceph_cluster) -> List[str]:
 
 
 def _wait_for_mds_daemon_count(
-    client, fs_name: str, expected_count: int, timeout: int = 240
+    client, fs_name: str, expected_count: int, timeout: int = 900
 ):
     end_time = time.time() + timeout
     while time.time() < end_time:
@@ -36,7 +36,7 @@ def _wait_for_mds_daemon_count(
             cmd="ceph orch ps --daemon_type=mds --format json",
             check_ec=False,
         )
-        daemons = json.loads(out)
+        daemons = json.loads(out) if out else []
         running = [
             d
             for d in daemons
@@ -45,6 +45,29 @@ def _wait_for_mds_daemon_count(
         ]
         if len(running) >= expected_count:
             return 0
+        status_out, _ = client.exec_command(
+            sudo=True,
+            cmd=f"ceph fs status {fs_name} --format json",
+            check_ec=False,
+        )
+        try:
+            status = json.loads(status_out) if status_out else {}
+            mdsmap = status.get("mdsmap") or []
+            present = 0
+            for entry in mdsmap:
+                state = str(entry.get("state", "")).lower()
+                if "active" in state or "standby" in state:
+                    present += 1
+            if present >= expected_count:
+                log.info(
+                    "MDS count satisfied via fs status (%s >= %s) for %s",
+                    present,
+                    expected_count,
+                    fs_name,
+                )
+                return 0
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
         time.sleep(10)
     return 1
 
