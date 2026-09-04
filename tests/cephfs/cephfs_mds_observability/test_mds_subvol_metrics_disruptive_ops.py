@@ -12,7 +12,6 @@ from tests.cephfs.cephfs_utilsV1 import FsUtils
 from tests.cephfs.lib.cephfs_common_lib import CephFSCommonUtils
 from tests.cephfs.lib.cephfs_subvol_metric_utils import MDSMetricsHelper
 from utility.log import Log
-from utility.retry import retry
 
 log = Log(__name__)
 
@@ -26,7 +25,7 @@ def _get_unique_mds_hosts(ceph_cluster) -> List[str]:
     return hosts
 
 
-def _wait_for_mds_daemon_count(
+def _poll_mds_daemon_count(
     client, fs_name: str, expected_count: int, timeout: int = 900
 ):
     end_time = time.time() + timeout
@@ -45,30 +44,25 @@ def _wait_for_mds_daemon_count(
         ]
         if len(running) >= expected_count:
             return 0
-        status_out, _ = client.exec_command(
-            sudo=True,
-            cmd=f"ceph fs status {fs_name} --format json",
-            check_ec=False,
-        )
-        try:
-            status = json.loads(status_out) if status_out else {}
-            mdsmap = status.get("mdsmap") or []
-            present = 0
-            for entry in mdsmap:
-                state = str(entry.get("state", "")).lower()
-                if "active" in state or "standby" in state:
-                    present += 1
-            if present >= expected_count:
-                log.info(
-                    "MDS count satisfied via fs status (%s >= %s) for %s",
-                    present,
-                    expected_count,
-                    fs_name,
-                )
-                return 0
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
         time.sleep(10)
+    return 1
+
+
+def _poll_for_mds(client, fs_name: str, timeout: int = 900, interval: int = 10):
+    """Poll ceph fs status until at least one MDS is active."""
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        try:
+            active = FsUtils.get_active_mdss(client, fs_name=fs_name)
+        except Exception as exc:
+            log.info("MDS poll for %s failed: %s", fs_name, exc)
+            active = []
+        if active:
+            log.info("Active MDS for %s: %s", fs_name, active)
+            return 0
+        log.info("No active MDS for %s yet; polling again in %ss", fs_name, interval)
+        time.sleep(interval)
+    log.error("No active MDS for %s within %ss", fs_name, timeout)
     return 1
 
 
@@ -264,10 +258,12 @@ def run(ceph_cluster, **kw):
                 sudo=True,
                 cmd=f"ceph orch apply mds {fs_name} --placement='{len(selected_hosts)} {placement}'",
             )
-            if _wait_for_mds_daemon_count(client, fs_name, expected_count=2):
+            if _poll_mds_daemon_count(client, fs_name, expected_count=2):
                 raise RuntimeError(
                     "MDS daemons did not reach expected count after placement apply"
                 )
+            if _poll_for_mds(client, fs_name):
+                raise RuntimeError("No active MDS after placement apply")
 
         fs_util.create_subvolumegroup(
             client, vol_name=fs_name, group_name=subvol_group, validate=True
@@ -334,15 +330,8 @@ def run(ceph_cluster, **kw):
             active_mds_node = ceph_cluster.get_node_by_hostname(active_host)
             fs_util.deamon_op(active_mds_node, rf"mds\.{fs_name}\.", "restart")
             log.info("Restarted active MDS daemon on host %s", active_host)
-
-            @retry(RuntimeError, tries=6, delay=10)
-            def _wait_for_active_mds():
-                active_mds = FsUtils.get_active_mdss(client, fs_name=fs_name)
-                if not active_mds:
-                    raise RuntimeError("No active MDS found after restart operation")
-                return 0
-
-            _wait_for_active_mds()
+            if _poll_for_mds(client, fs_name):
+                raise RuntimeError("No active MDS found after restart operation")
 
         def _restart_active_mgr_daemon():
             client.exec_command(sudo=True, cmd="ceph orch restart mgr")
@@ -366,6 +355,8 @@ def run(ceph_cluster, **kw):
                 raise RuntimeError("Active MDS node not found for reboot operation")
             fs_util.reboot_node(ceph_node=active_mds_node)
             log.info("Rebooted active MDS node: %s", active_host)
+            if _poll_for_mds(client, fs_name):
+                raise RuntimeError("No active MDS found after node reboot")
 
         def _remove_add_mds_service():
             out, _ = client.exec_command(
@@ -396,25 +387,27 @@ def run(ceph_cluster, **kw):
                 sudo=True,
                 cmd=f"ceph orch apply mds {fs_name} --placement='{len(reduced_hosts)} {reduced_placement}'",
             )
-            if _wait_for_mds_daemon_count(
+            if _poll_mds_daemon_count(
                 client, fs_name, expected_count=len(reduced_hosts)
             ):
                 raise RuntimeError("MDS count did not converge after remove operation")
+            if _poll_for_mds(client, fs_name):
+                raise RuntimeError("No active MDS after remove operation")
 
             client.exec_command(
                 sudo=True,
                 cmd=f"ceph orch apply mds {fs_name} --placement='{len(fs_hosts)} {full_placement}'",
             )
 
-            if _wait_for_mds_daemon_count(
-                client, fs_name, expected_count=len(fs_hosts)
-            ):
+            if _poll_mds_daemon_count(client, fs_name, expected_count=len(fs_hosts)):
                 out, _ = client.exec_command(
                     sudo=True,
                     cmd=f"ceph fs status {fs_name}",
                 )
                 log.info("FS status: %s", out)
                 raise RuntimeError("MDS count did not converge after add operation")
+            if _poll_for_mds(client, fs_name):
+                raise RuntimeError("No active MDS after add operation")
 
             log.info("Completed MDS service remove/add for fs %s", fs_name)
 
