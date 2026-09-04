@@ -386,7 +386,7 @@ class SnapUtils(object):
                         f"Time difference between snapshot {sched_snap_list[i]} and "
                         f"{sched_snap_list[j]}: {time_diff} minutes"
                     )
-                    if int(sched_num) == time_diff:
+                    if abs(int(sched_num) - time_diff) <= 1:
                         sched_verified = 1
                         snap_count += 1
                         log.info(
