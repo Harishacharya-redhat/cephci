@@ -7,6 +7,7 @@ from ceph.ceph import CommandFailed
 from cli.ceph.ceph import Ceph
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from utility.log import Log
+from utility.retry import retry
 
 log = Log(__name__)
 
@@ -434,7 +435,9 @@ def run(ceph_cluster, **kw):
 
         # Creation of FS
         fs_util.create_fs(client1, fs_name_1)
-        fs_util.wait_for_mds_process(client1, fs_name_1)
+        retry(CommandFailed, tries=30, delay=10, backoff=1)(fs_util.get_mds_status)(
+            client1, 1, vol_name=fs_name_1, expected_status="active"
+        )
 
         # Get ceph fs volume info of specific volume
         fs_volume_dict = fs_util.collect_fs_volume_info_for_validation(
@@ -504,7 +507,9 @@ def run(ceph_cluster, **kw):
 
         # Creation of 2nd FS
         fs_util.create_fs(client1, fs_name_2)
-        fs_util.wait_for_mds_process(client1, fs_name_2)
+        retry(CommandFailed, tries=30, delay=10, backoff=1)(fs_util.get_mds_status)(
+            client1, 1, vol_name=fs_name_2, expected_status="active"
+        )
 
         # Get ceph fs volume info of specific volume
         fs_volume_dict_2 = fs_util.collect_fs_volume_info_for_validation(
