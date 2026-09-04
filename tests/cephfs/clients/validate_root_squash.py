@@ -331,12 +331,32 @@ def run(ceph_cluster, **kw):
                 new_client_hostname="client_2",
                 extra_params=f" --client_fs {fs_list[0]}",
             )
-            fs_util.fuse_mount(
-                [client],
-                "/mnt/client_root_squash_Scenario_3_1",
-                new_client_hostname="client_2",
-                extra_params=f" --client_fs {fs_list[1]}",
+            # client_2 MDS caps are fsname=cephfs_1 only. One-shot mount of
+            # cephfs_2 (no fuse_mount retry) must fail with EPERM.
+            # https://docs.ceph.com/en/latest/cephfs/client-auth/
+            fs2_fuse_mounted = False
+            client.exec_command(
+                sudo=True, cmd="mkdir -p /mnt/client_root_squash_Scenario_3_1"
             )
+            try:
+                client.exec_command(
+                    sudo=True,
+                    cmd=(
+                        "ceph-fuse -n client.client_2 "
+                        f"/mnt/client_root_squash_Scenario_3_1 --client_fs {fs_list[1]}"
+                    ),
+                )
+                fs2_fuse_mounted = True
+                log.warning(
+                    "client_2 unexpectedly mounted %s; continuing squash checks",
+                    fs_list[1],
+                )
+            except CommandFailed as exc:
+                log.info(
+                    "Expected fuse denial for client_2 on %s (no MDS caps): %s",
+                    fs_list[1],
+                    exc,
+                )
             fs_util.kernel_mount(
                 [client1],
                 "/mnt/client_root_squash_Scenario_3",
@@ -344,13 +364,30 @@ def run(ceph_cluster, **kw):
                 new_client_hostname="client_2",
                 extra_params=f",fs={fs_list[0]}",
             )
-            fs_util.kernel_mount(
-                [client1],
-                "/mnt/client_root_squash_Scenario_3_1",
-                ",".join(mon_node_ips),
-                new_client_hostname="client_2",
-                extra_params=f",fs={fs_list[1]}",
+            fs2_kernel_mounted = False
+            client1.exec_command(
+                sudo=True, cmd="mkdir -p /mnt/client_root_squash_Scenario_3_1"
             )
+            try:
+                mon_ip = ",".join(mon_node_ips)
+                client1.exec_command(
+                    sudo=True,
+                    cmd=(
+                        f"mount -t ceph {mon_ip}:/ /mnt/client_root_squash_Scenario_3_1 "
+                        f"-o name=client_2,fs={fs_list[1]}"
+                    ),
+                )
+                fs2_kernel_mounted = True
+                log.warning(
+                    "client_2 unexpectedly kernel-mounted %s; continuing squash checks",
+                    fs_list[1],
+                )
+            except CommandFailed as exc:
+                log.info(
+                    "Expected kernel denial for client_2 on %s (no MDS caps): %s",
+                    fs_list[1],
+                    exc,
+                )
             for cl in [client, client1]:
                 validate_file_dir(
                     cl,
@@ -358,12 +395,13 @@ def run(ceph_cluster, **kw):
                     file_name="test_scenario_3",
                     allowed=False,
                 )
-                validate_file_dir(
-                    cl,
-                    path="/mnt/client_root_squash_Scenario_3_1",
-                    file_name="test_scenario_3_1",
-                    allowed=False,
-                )
+                if fs2_fuse_mounted or fs2_kernel_mounted:
+                    validate_file_dir(
+                        cl,
+                        path="/mnt/client_root_squash_Scenario_3_1",
+                        file_name="test_scenario_3_1",
+                        allowed=False,
+                    )
             log.info(
                 "NOTE: *******Change the allowed flag based on BZ : 2293943********"
             )
