@@ -784,6 +784,7 @@ class CephfsMirroringUtils(object):
         return daemon_names
 
     @retry(CommandFailed, tries=5, delay=30)
+    @retry(CommandFailed, tries=5, delay=30)
     def get_filesystem_id_by_name(self, source_clients, fs_name):
         """
         Fetches the filesystem ID of a specified Ceph filesystem.
@@ -804,6 +805,8 @@ class CephfsMirroringUtils(object):
                 filesystem_id = filesystem["filesystem_id"]
                 break
         log.info(filesystem_id)
+        if filesystem_id is None:
+            raise CommandFailed(f"Filesystem id not found yet for {fs_name}")
         return filesystem_id
 
     @retry(CommandFailed, tries=5, delay=60)
@@ -1682,6 +1685,30 @@ class CephfsMirroringUtils(object):
         except Exception as e:
             log.error(f"Error destroying CephFS mirroring setup: {e}")
 
+    def destroy_cephfs_mirroring_best_effort(
+        self,
+        source_fs,
+        source_client,
+        target_fs,
+        target_client,
+        target_user,
+        peer_uuid=None,
+    ):
+        """Tear down mirroring when a peer uuid may be missing after a failed setup."""
+        try:
+            if not peer_uuid:
+                peer_uuid = self.get_peer_uuid_by_name(source_client, source_fs)
+            self.destroy_cephfs_mirroring(
+                source_fs,
+                source_client,
+                target_fs,
+                target_client,
+                target_user,
+                peer_uuid,
+            )
+        except Exception as ex:
+            log.warning("Skipping CephFS mirroring destroy: %s", ex)
+
     @retry(Exception, tries=10, delay=15, backoff=1)
     def add_files_and_validate(
         self,
@@ -1718,7 +1745,9 @@ class CephfsMirroringUtils(object):
             cmd=f"echo '{random_data}' | sudo tee {fuse_dir}{fuse_subvol_path}{file_name1} > /dev/null"
         )
         source_clients[0].exec_command(
-            sudo=True, cmd=f"mkdir {kernel_dir}{kernel_subvol_path}.snap/{snap1}"
+            sudo=True,
+            cmd=f"mkdir {kernel_dir}{kernel_subvol_path}.snap/{snap1}",
+            check_ec=False,
         )
         log.info(
             "Fetch the daemon_name, fsid, asok_file, filesystem_id and peer_id to validate the synchronisation"
@@ -1747,7 +1776,9 @@ class CephfsMirroringUtils(object):
         )
 
         source_clients[0].exec_command(
-            sudo=True, cmd=f"mkdir {fuse_dir}{fuse_subvol_path}.snap/{snap2}"
+            sudo=True,
+            cmd=f"mkdir {fuse_dir}{fuse_subvol_path}.snap/{snap2}",
+            check_ec=False,
         )
         result_snap_f1 = self.validate_snapshot_sync_status(
             cephfs_mirror_node,

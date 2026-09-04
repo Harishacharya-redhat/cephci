@@ -322,8 +322,13 @@ def run(ceph_cluster, **kw):
             f"ceph fs snapshot mirror peer_list {source_fs} --format json-pretty"
         )
         log.info(out)
-        if out:
-            log.error("Peer list not removed")
+        peers = out
+        try:
+            peers = json.loads(out) if out and str(out).strip() else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            peers = str(out).strip()
+        if peers:
+            log.error("Peer list not removed: %s", out)
         log.info("Import token again")
         log.info(token)
         fs_mirroring_utils.import_peer_bootstrap(source_fs, token, source_clients[0])

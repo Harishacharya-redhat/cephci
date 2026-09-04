@@ -408,13 +408,13 @@ def run(ceph_cluster, **kw):
             )
 
         log.info("Destroy CephFS Mirroring setup.")
-        fs_mirroring_utils.destroy_cephfs_mirroring(
+        fs_mirroring_utils.destroy_cephfs_mirroring_best_effort(
             source_fs,
             source_clients[0],
             target_fs,
             target_clients[0],
             target_user,
-            peer_uuid,
+            locals().get("peer_uuid"),
         )
 
         log.info("Remove Subvolumes")
