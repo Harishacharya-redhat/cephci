@@ -463,15 +463,15 @@ def run(ceph_cluster, **kw):
         log.debug(f"Output of FS_1 status: {fs_status_dict}")
 
         # Validation
+        # data_avail / meta_avail are omitted: ceph fs volume info and
+        # ceph fs status round GiB independently (73.4G vs 73.5G).
         keys_to_be_validated = [
             "status",
             "fsname",
             "fsid",
             "rank",
             "mds_name",
-            "data_avail",
             "data_used",
-            "meta_avail",
             "meta_used",
             "mon_addrs",
         ]
