@@ -1,6 +1,7 @@
 import json
 import random
 import string
+import time
 import traceback
 from json import JSONDecodeError
 from threading import Thread
@@ -21,6 +22,35 @@ from utility.log import Log
 from utility.utils import get_cephci_config
 
 log = Log(__name__)
+
+
+def _wait_for_nfs_export_listed(client, nfs_name, export_name, timeout=180):
+    """Wait until ``ceph nfs export ls`` includes the export path."""
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        out, _ = client.exec_command(
+            sudo=True, cmd=f"ceph nfs export ls {nfs_name}", check_ec=False
+        )
+        if export_name in (out or ""):
+            log.info("NFS export %s is listed on cluster %s", export_name, nfs_name)
+            return True
+        time.sleep(10)
+    return False
+
+
+def _wait_for_ganesha_pseudo(client, nfs_server, export_name, timeout=300):
+    """Wait until Ganesha publishes the pseudo path (showmount)."""
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        out, _ = client.exec_command(
+            sudo=True, cmd=f"showmount -e {nfs_server}", check_ec=False
+        )
+        if export_name in (out or ""):
+            log.info("Ganesha published %s on %s", export_name, nfs_server)
+            return True
+        log.info("Waiting for Ganesha to publish %s on %s", export_name, nfs_server)
+        time.sleep(15)
+    return False
 
 
 def run(ceph_cluster, **kw):
@@ -241,9 +271,10 @@ def run(ceph_cluster, **kw):
             if byok_test_params is not None:
                 sv_list = byok_test_params["setup_params"]["sv_list"]
                 for sv in sv_list:
-                    if sv.get("nfs_mount_dir"):
+                    nfs_client = sv.get("nfs_client")
+                    if sv.get("nfs_mount_dir") and hasattr(nfs_client, "exec_command"):
                         try:
-                            sv["nfs_client"].exec_command(
+                            nfs_client.exec_command(
                                 sudo=True, cmd=f"umount -l {sv['nfs_mount_dir']}"
                             )
                         except Exception as ex:
@@ -319,6 +350,22 @@ def nfs_byok_cephfs_test_run():
     log.info("Verify NFS mount with encrypted export suceeds")
     for sv in sv_list:
         sv["nfs_client"] = random.choice(clients)
+        if not _wait_for_nfs_export_listed(client, nfs_name, sv["nfs_export"]):
+            log.error(
+                "NFS export %s was not listed for cluster %s before mount",
+                sv["nfs_export"],
+                nfs_name,
+            )
+            return 1
+        if not _wait_for_ganesha_pseudo(
+            sv["nfs_client"], nfs_node_name, sv["nfs_export"]
+        ):
+            log.error(
+                "Ganesha did not publish %s on %s",
+                sv["nfs_export"],
+                nfs_node_name,
+            )
+            return 1
         fs_util.cephfs_nfs_mount(
             sv["nfs_client"], nfs_node_name, sv["nfs_export"], sv["nfs_mount_dir"]
         )
