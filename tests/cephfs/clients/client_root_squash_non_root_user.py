@@ -7,6 +7,7 @@ import traceback
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from utility.log import Log
+from utility.retry import retry
 
 log = Log(__name__)
 
@@ -62,8 +63,9 @@ def run(ceph_cluster, **kw):
         fs_details = fs_util.get_fs_info(clients[0], fs1)
         if not fs_details:
             fs_util.create_fs(clients[0], fs1)
-        if not fs_util.wait_for_mds_process(clients[0], fs1, timeout=300):
-            raise CommandFailed(f"MDS for {fs1} did not reach running state")
+        retry(CommandFailed, tries=30, delay=10, backoff=1)(fs_util.get_mds_status)(
+            clients[0], 1, vol_name=fs1, expected_status="active"
+        )
         fuse_mount_dir = "/mnt/fuse_" + "".join(
             secrets.choice(string.ascii_uppercase + string.digits) for i in range(5)
         )
