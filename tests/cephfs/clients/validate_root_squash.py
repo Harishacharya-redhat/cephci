@@ -7,6 +7,7 @@ from ceph.ceph import CommandFailed
 from ceph.parallel import parallel
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from utility.log import Log
+from utility.retry import retry
 
 log = Log(__name__)
 global stop_flag
@@ -104,6 +105,10 @@ def run(ceph_cluster, **kw):
             {"subvol_name": "subvol_4", "group_name": "subvol_group_2"},
         ]
         [fs_util.create_fs(client, fs_name) for fs_name in fs_list]
+        for fs_name in fs_list:
+            retry(CommandFailed, tries=30, delay=10, backoff=1)(fs_util.get_mds_status)(
+                client, 1, vol_name=fs_name, expected_status="active"
+            )
         for fs in fs_list:
             for subvolume_group in subvolume_group_list:
                 subvolumegroup = {"vol_name": fs, "group_name": subvolume_group}
