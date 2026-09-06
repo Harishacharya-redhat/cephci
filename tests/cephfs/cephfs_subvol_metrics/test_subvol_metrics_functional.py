@@ -181,7 +181,7 @@ def run(ceph_cluster, **kw):
         expected_used_bytes = subvol_info.get("bytes_used", 0)
         if expected_used_bytes is None:
             return 1
-        if not used_bytes_close(used_bytes, expected_used_bytes):
+        if not used_bytes_close(used_bytes, expected_used_bytes, strict=True):
             log.error(
                 "Step 1: used_bytes mismatch with expected_used_bytes used_bytes=%s, expected_used_bytes=%s",
                 used_bytes,
@@ -225,7 +225,7 @@ def run(ceph_cluster, **kw):
             client, vol_name=vol_name, subvol_name=subvol_name
         )
         expected_used_bytes = subvol_info.get("bytes_used", 0)
-        if not used_bytes_close(used_bytes, expected_used_bytes):
+        if not used_bytes_close(used_bytes, expected_used_bytes, strict=True):
             log.error(
                 "Step 2: used_bytes mismatch with expected_used_bytes used_bytes=%s, expected_used_bytes=%s",
                 used_bytes,
@@ -271,7 +271,7 @@ def run(ceph_cluster, **kw):
                 retry_cnt += 1
                 time.sleep(2)
                 continue
-            elif not used_bytes_close(used_bytes, expected_used_bytes):
+            elif not used_bytes_close(used_bytes, expected_used_bytes, strict=True):
                 retry_cnt += 1
                 time.sleep(2)
                 continue
@@ -284,7 +284,7 @@ def run(ceph_cluster, **kw):
                 quota_bytes,
             )
             return 1
-        if not used_bytes_close(used_bytes, expected_used_bytes):
+        if not used_bytes_close(used_bytes, expected_used_bytes, strict=True):
             log.error(
                 "Step 4: used_bytes mismatch with expected_used_bytes used_bytes=%s, expected_used_bytes=%s",
                 used_bytes,
@@ -298,6 +298,10 @@ def run(ceph_cluster, **kw):
         )
 
         log.info("All steps passed: quota_bytes correctly reflects quota changes")
+        log.info(
+            "TEST PASSED - subvolume metrics functional quota/used_bytes checks "
+            "(CEPH-83632373)"
+        )
         return 0
 
     except Exception as e:

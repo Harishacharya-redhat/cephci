@@ -369,6 +369,10 @@ def run(ceph_cluster, **kw):
         except Exception as e:
             log.error("Failed to delete fio log %s: %s", fio_log_path, e)
 
+        log.info(
+            "TEST PASSED - subvolume metrics timeline and post-IO used_bytes "
+            "convergence (CEPH-83621832)"
+        )
         return 0
 
     except Exception as e:
