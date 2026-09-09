@@ -541,6 +541,25 @@ class SnapUtils(object):
             i += 1
             time.sleep(30)
 
+    def wait_for_scheduled_snaps(
+        self, client, path, min_count=4, timeout=300, interval=15
+    ):
+        """Poll until scheduled snapshots appear under path/.snap/."""
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            out, _ = client.exec_command(
+                sudo=True, cmd=f"ls -lrt {path}.snap/ | wc -l"
+            )
+            snap_count = int(out.strip())
+            log.info("Scheduled snap count under %s: %s", path, snap_count)
+            if snap_count >= min_count:
+                return
+            time.sleep(interval)
+        raise CommandFailed(
+            f"Scheduled snaps not created under {path} within {timeout}s "
+            f"(expected at least {min_count})"
+        )
+
     def validate_snap_retention(
         self, client, client_path, sched_path, ret_type="m", fs_name="cephfs"
     ):
