@@ -122,7 +122,8 @@ tests:
       module: rados_prep.py
       config:
         log_to_file: true
-      desc: Change config options to enable logging to file
+        mds_debug_mds: 20
+      desc: Change config options to enable logging to file and mds debug_mds
 
   - test:
       abort-on-fail: false
