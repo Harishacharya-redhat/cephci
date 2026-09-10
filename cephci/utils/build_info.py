@@ -61,6 +61,7 @@ class CephTestManifest:
             datacenter = "default"
 
         self.datacenter = datacenter
+        self._cached_build_details: Optional[dict[str, Any]] = None
 
     @property
     def platform(self) -> str:
@@ -207,6 +208,9 @@ class CephTestManifest:
         """
         # Please ensure to use _release instead of release, since release is a
         # property and can be overridden.
+        if self._cached_build_details is not None:
+            return self._cached_build_details
+
         _msg = f"Retreving build details of {self.product} - {self._release}. "
         _msg += f"Looking up {self.build_type} section."
         logger.debug(_msg)
@@ -222,7 +226,9 @@ class CephTestManifest:
             manifest_url += f"redhat/{manifest_file}"
 
         try:
-            data: requests.Response = requests.get(manifest_url, verify=False)
+            data: requests.Response = requests.get(
+                manifest_url, verify=False, timeout=30
+            )
         except requests.RequestException as e:
             raise RuntimeError(
                 "Unable to download the Ceph QE manifest file %s \n%s", manifest_url, e
@@ -238,6 +244,7 @@ class CephTestManifest:
                 for k, v in images.items():
                     images[k] = v.replace("@sha256:", ":")
 
+            self._cached_build_details = build_data
             return build_data
 
         except yaml.YAMLError:
