@@ -138,10 +138,14 @@ def run(ceph_cluster, **kw):
         log.info("finished removing values, passed")
 
     if config.get("log_to_file"):
-        if not rados_obj.enable_file_logging():
+        mds_debug_mds = config.get("mds_debug_mds")
+        if not rados_obj.enable_file_logging(mds_debug_mds=mds_debug_mds):
             log.error("Error while setting config to enable logging into file")
             return 1
-        log.info("Logging to file configured")
+        if mds_debug_mds is not None:
+            log.info(f"Logging to file configured with mds debug_mds={mds_debug_mds}")
+        else:
+            log.info("Logging to file configured")
 
     if config.get("cluster_configuration_checks"):
         cls_config = config.get("cluster_configuration_checks")

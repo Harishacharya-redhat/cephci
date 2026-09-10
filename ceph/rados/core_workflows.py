@@ -1409,7 +1409,7 @@ class RadosOrchestrator:
         log.error("Timeout! Could not achieve desired fragmentation.")
         return False
 
-    def enable_file_logging(self) -> bool:
+    def enable_file_logging(self, mds_debug_mds: int | None = None) -> bool:
         """
         Enables the cluster logging into files at var/log/ceph and checks file permissions
         Returns: True -> pass, False -> fail
@@ -1419,6 +1419,8 @@ class RadosOrchestrator:
             self.node.shell([cmd])
             cmd = "ceph config set global mon_cluster_log_to_file true"
             self.node.shell([cmd])
+            if mds_debug_mds is not None:
+                self.node.shell([f"ceph config set mds debug_mds {mds_debug_mds}"])
         except Exception:
             log.error("Error while enabling config to log into file")
             return False
