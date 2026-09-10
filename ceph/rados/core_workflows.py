@@ -1409,7 +1409,7 @@ class RadosOrchestrator:
         log.error("Timeout! Could not achieve desired fragmentation.")
         return False
 
-    def enable_file_logging(self, mds_debug_mds: int | None = None) -> bool:
+    def enable_file_logging(self, mds_debug_mds: Optional[int] = None) -> bool:
         """
         Enables the cluster logging into files at var/log/ceph and checks file permissions
         Returns: True -> pass, False -> fail
