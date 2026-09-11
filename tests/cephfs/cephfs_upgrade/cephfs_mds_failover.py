@@ -5,6 +5,12 @@ import traceback
 from pip._internal.exceptions import CommandError
 
 from ceph.ceph import CommandFailed
+from tests.cephfs.cephfs_upgrade.cluster_state import (
+    log_pre_upgrade_cluster_state,
+    parse_upgrade_status,
+    wait_for_active_mdss,
+    wait_for_upgrade_in_progress,
+)
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from utility.log import Log
 from utility.retry import retry
@@ -33,20 +39,26 @@ def run(ceph_cluster, **kw):
             return 1
         client1 = clients[0]
         fs_name = "cephfs"
-        log.info("Wait for Upgrade to start")
-        time.sleep(120)
         retry_exec_command = retry(CommandFailed, tries=10, delay=30, backoff=1)(
             client1.exec_command
         )
-        # while True:
+
+        log.info("Wait for upgrade to start")
+        if not wait_for_upgrade_in_progress(client1):
+            raise CommandError("Upgrade did not start within the expected timeout")
+
+        log_pre_upgrade_cluster_state(client1, fs_name=fs_name)
+
         start_time = time.time()
         while time.time() - start_time < 1800:
-            cmd = "ceph orch upgrade status"
-            out, rc = client1.exec_command(cmd=cmd, sudo=True)
-            exp_msg = "There are no upgrades in progress currently."
-            if exp_msg in out:
-                log.info("Upgrade Complete...")
+            out, rc = client1.exec_command(
+                cmd="ceph orch upgrade status", sudo=True
+            )
+            upgrade_status = parse_upgrade_status(out)
+            if not upgrade_status.get("in_progress"):
+                log.info("Upgrade complete or not in progress: %s", upgrade_status)
                 break
+
             mds_ls = fs_util.get_active_mdss(client1, fs_name=fs_name)
             for mds in mds_ls:
                 out, rc = retry_exec_command(
@@ -54,9 +66,9 @@ def run(ceph_cluster, **kw):
                 )
                 log.info(out)
 
-                if not wait_for_two_active_mds(client1, fs_name):
+                if not wait_for_active_mdss(client1, fs_name):
                     raise CommandError(
-                        "2 Active MDS did not start after failing one MDS"
+                        "Active MDS ranks did not recover after failing one MDS"
                     )
                 time.sleep(120)
                 out, rc = retry_exec_command(
@@ -82,47 +94,3 @@ def run(ceph_cluster, **kw):
         return 1
     finally:
         pass
-
-
-def wait_for_two_active_mds(client1, fs_name, max_wait_time=600, retry_interval=20):
-    """
-    Wait until two active MDS (Metadata Servers) are found or the maximum wait time is reached.
-
-    Args:
-        data (str): JSON data containing MDS information.
-        max_wait_time (int): Maximum wait time in seconds (default: 180 seconds).
-        retry_interval (int): Interval between retry attempts in seconds (default: 5 seconds).
-
-    Returns:
-        bool: True if two active MDS are found within the specified time, False if not.
-
-    Example usage:
-    ```
-    data = '...'  # JSON data
-    if wait_for_two_active_mds(data):
-        print("Two active MDS found.")
-    else:
-        print("Timeout: Two active MDS not found within the specified time.")
-    ```
-    """
-    retry_exec_command = retry(CommandFailed, tries=10, delay=30, backoff=1)(
-        client1.exec_command
-    )
-    start_time = time.time()
-    while time.time() - start_time < max_wait_time:
-        out, rc = retry_exec_command(
-            cmd=f"ceph fs status {fs_name} -f json", client_exec=True
-        )
-        log.info(out)
-        parsed_data = json.loads(out)
-        active_mds = [
-            mds
-            for mds in parsed_data.get("mdsmap", [])
-            if mds.get("rank", -1) in [0, 1] and mds.get("state") == "active"
-        ]
-        if len(active_mds) == 2:
-            return True  # Two active MDS found
-        else:
-            time.sleep(retry_interval)  # Retry after the specified interval
-
-    return False
