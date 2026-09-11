@@ -138,6 +138,8 @@ tests:
       module: cephfs_upgrade.upgrade_pre_req.py
       name: "creation of Prerequisites for Upgrade"
       polarion-id: CEPH-83575312
+      config:
+        max_mds: 2
   - test:
       abort-on-fail: false
       desc: Collects all the info required for validating the upgrade

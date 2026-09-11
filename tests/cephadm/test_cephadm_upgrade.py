@@ -10,6 +10,7 @@ from ceph.ceph_admin.orch import Orch
 from ceph.rados.rados_bench import RadosBench
 from ceph.utils import is_legacy_container_present, mgr_accept_license, remove_repos
 from cephci.utils.build_info import CephTestManifest
+from tests.cephfs.cephfs_upgrade.cluster_state import log_pre_upgrade_cluster_state
 from utility.log import Log
 
 log = Log(__name__)
@@ -126,6 +127,9 @@ def run(ceph_cluster, **kwargs) -> int:
                 cmd=f"{base_cmd} config set mgr mgr/cephadm/no_five_one_rgw true --force"
             )
             installer.exec_command(cmd=f"{base_cmd} orch upgrade stop")
+
+        # Log cluster and CephFS state immediately before upgrade starts.
+        log_pre_upgrade_cluster_state(orch.installer)
 
         # Start Upgrade
         if not config.get("args", {}).get("rhcs-version", None):

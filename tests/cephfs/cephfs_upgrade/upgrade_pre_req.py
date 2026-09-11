@@ -10,6 +10,7 @@ from looseversion import LooseVersion
 from ceph.ceph import CommandFailed
 from tests.cephfs.cephfs_utilsV1 import FsUtils
 from tests.cephfs.cephfs_volume_management import wait_for_process
+from tests.cephfs.cephfs_upgrade.cluster_state import log_pre_upgrade_cluster_state
 from tests.cephfs.lib.cephfs_common_lib import CephFSCommonUtils
 from tests.cephfs.snapshot_clone.cephfs_snap_utils import SnapUtils
 from utility.log import Log
@@ -44,7 +45,8 @@ def run(ceph_cluster, **kw):
         build = config.get("build", config.get("rhbuild"))
         clients = ceph_cluster.get_ceph_objects("client")
         cephfs_common_utils = CephFSCommonUtils(ceph_cluster)
-        active_mds_cnt = config.get("max_mds", 5)
+        active_mds_cnt = config.get("max_mds", 2)
+        log.info("Configured max_mds for upgrade pre-req: %s", active_mds_cnt)
         log.info("checking Pre-requisites")
         if len(clients) < 2:
             log.error(
@@ -120,6 +122,7 @@ def run(ceph_cluster, **kw):
                 "Cluster did not reach HEALTH_OK within 300 seconds."
             )
             return 1
+        log_pre_upgrade_cluster_state(clients[0], fs_name=default_fs)
         upgrade_config = None
         vol_list = [default_fs, "cephfs-ec"]
         ceph_config["CephFS"] = {}
