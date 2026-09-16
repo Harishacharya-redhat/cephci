@@ -501,71 +501,78 @@ def run(ceph_cluster, **kw):
         log.info("Cleanup: GKLM, NFS clusters, and mounts")
         if test_failed:
             collect_gklm_logs_on_failure(gklm_params)
-        if config.get("check_sighup", False):
-            try:
-                ensure_gklm_login(gklm_rest_client)
-                all_certs = []
-                sys_certs = (
-                    gklm_api_call(
-                        gklm_rest_client,
-                        gklm_rest_client.certificates.list_system_certificates,
-                    )
-                    or []
-                )
-                for x in sys_certs:
-                    a = x.get("alias") or x.get("Alias")
-                    if a:
-                        all_certs.append(a)
-                certs = (
-                    gklm_api_call(
-                        gklm_rest_client,
-                        gklm_rest_client.certificates.list_certificates,
-                    )
-                    or []
-                )
-                for x in certs:
-                    a = x.get("alias") or x.get("Alias")
-                    if a:
-                        all_certs.append(a)
-                if "certsighup" in all_certs:
-                    gklm_cert_alias = "certsighup"
-            except Exception as e:
-                log.warning(
-                    "Could not refresh GKLM cert alias list during cleanup: %s", e
-                )
-
-        # Cleanup single cluster or multi cluster accordingly
-        if nfs_replication_number == 1 and client_export_mount_dict is not None:
-            log.info("Cleaning up single-cluster mounts and exports")
-            cleanup_custom_nfs_cluster_multi_export_client(
-                clients, nfs_mount, nfs_name, nfs_export, export_num
+        if config.get("skip_cleanup"):
+            log.info(
+                "Skipping BYOK cleanup (skip_cleanup=true) so NFS/KMIP can be inspected"
             )
-            log.info("Cleaning up single-cluster FUSE mounts")
-            for client in clients:
-                for mount in [
-                    m + "_fuse"
-                    for m in client_export_mount_dict.get(client, {}).get("mount", [])
-                ]:
-                    client.exec_command(
-                        sudo=True, cmd=f"rm -rf {mount}/*", long_running=True
-                    )
-                    if Unmount(client).unmount(mount):
-                        raise OperationFailedError(
-                            f"Failed to unmount FUSE mount {mount} on {client.hostname}"
+        else:
+            if config.get("check_sighup", False):
+                try:
+                    ensure_gklm_login(gklm_rest_client)
+                    all_certs = []
+                    sys_certs = (
+                        gklm_api_call(
+                            gklm_rest_client,
+                            gklm_rest_client.certificates.list_system_certificates,
                         )
-        elif nfs_replication_number > 1:
-            log.info("Cleaning up multi-cluster mounts and exports")
-            dynamic_cleanup_common_names(
-                clients,
-                mounts_common_name=config.get("nfs_mount_common_name", "nfs_byok"),
-                group_name=subvolume_group,
+                        or []
+                    )
+                    for x in sys_certs:
+                        a = x.get("alias") or x.get("Alias")
+                        if a:
+                            all_certs.append(a)
+                    certs = (
+                        gklm_api_call(
+                            gklm_rest_client,
+                            gklm_rest_client.certificates.list_certificates,
+                        )
+                        or []
+                    )
+                    for x in certs:
+                        a = x.get("alias") or x.get("Alias")
+                        if a:
+                            all_certs.append(a)
+                    if "certsighup" in all_certs:
+                        gklm_cert_alias = "certsighup"
+                except Exception as e:
+                    log.warning(
+                        "Could not refresh GKLM cert alias list during cleanup: %s", e
+                    )
+
+            # Cleanup single cluster or multi cluster accordingly
+            if nfs_replication_number == 1 and client_export_mount_dict is not None:
+                log.info("Cleaning up single-cluster mounts and exports")
+                cleanup_custom_nfs_cluster_multi_export_client(
+                    clients, nfs_mount, nfs_name, nfs_export, export_num
+                )
+                log.info("Cleaning up single-cluster FUSE mounts")
+                for client in clients:
+                    for mount in [
+                        m + "_fuse"
+                        for m in client_export_mount_dict.get(client, {}).get(
+                            "mount", []
+                        )
+                    ]:
+                        client.exec_command(
+                            sudo=True, cmd=f"rm -rf {mount}/*", long_running=True
+                        )
+                        if Unmount(client).unmount(mount):
+                            raise OperationFailedError(
+                                f"Failed to unmount FUSE mount {mount} on {client.hostname}"
+                            )
+            elif nfs_replication_number > 1:
+                log.info("Cleaning up multi-cluster mounts and exports")
+                dynamic_cleanup_common_names(
+                    clients,
+                    mounts_common_name=config.get("nfs_mount_common_name", "nfs_byok"),
+                    group_name=subvolume_group,
+                )
+
+            # Clean GKLM resources
+            clean_up_gklm(
+                gklm_rest_client=gklm_rest_client,
+                gkml_client_name=gkml_client_name,
+                gklm_cert_alias=gklm_cert_alias,
             )
 
-        # Clean GKLM resources
-        clean_up_gklm(
-            gklm_rest_client=gklm_rest_client,
-            gkml_client_name=gkml_client_name,
-            gklm_cert_alias=gklm_cert_alias,
-        )
-
-        log.info("Cleanup completed for all test resources.")
+            log.info("Cleanup completed for all test resources.")
