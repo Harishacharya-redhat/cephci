@@ -1,6 +1,6 @@
 # ===============================================================================
 # DEBUG-ONLY (branch debug/nfs-byok-ibmcloud-hold) — do not merge to main.
-# IBM Cloud BYOK hold suite: infra + first BYOK test (CEPH-83625072) + 6h sleep.
+# IBM Cloud BYOK debug suite: infra + first BYOK test (CEPH-83625072). No hold sleep.
 # Configuration: conf/tentacle/nfs/1admin-7node-3client.yaml
 #
 # Prerequisites:
@@ -145,12 +145,3 @@ tests:
             nfs_mount: /mnt/nfs_byok
             nfs_export: /export_byok
             nfs_instance_name: nfs_byok
-            skip_cleanup: true                  # keep NFS/KMIP for IBM Cloud debug
-
-     - test:
-         name: Hold IBM Cloud cluster for 6 hours
-         desc: Sleep 6 hours so BYOK/KMIP can be debugged on IBM Cloud nodes
-         module: debug_hold.py
-         abort-on-fail: false
-         config:
-            hours: 6
