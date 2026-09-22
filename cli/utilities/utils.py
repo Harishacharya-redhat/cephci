@@ -741,7 +741,14 @@ def create_files(client, mount_point, file_count, windows_client=False, sudo=Tru
             raise OperationFailedError(f"failed to create file file{i}")
 
 
-def perform_lookups(client, mount_point, num_files, windows_client=False, sudo=True):
+def perform_lookups(
+    client,
+    mount_point,
+    num_files,
+    windows_client=False,
+    sudo=True,
+    recursive=True,
+):
     """
     Perform lookups
     Args:
@@ -750,6 +757,7 @@ def perform_lookups(client, mount_point, num_files, windows_client=False, sudo=T
         num_files (int): total file count
         windows_client (bool): Whether client is Windows
         sudo (bool): Whether to use sudo for Linux client commands
+        recursive (bool): Use recursive listing on Linux (default True)
     """
     for _ in range(num_files):
         try:
@@ -757,9 +765,10 @@ def perform_lookups(client, mount_point, num_files, windows_client=False, sudo=T
                 out, _ = client.exec_command(cmd=f"dir {mount_point}")
                 log.info(out)
             else:
+                ls_flags = "laRt" if recursive else "la"
                 out, _ = client.exec_command(
                     sudo=sudo,
-                    cmd=f"ls -laRt {mount_point}/",
+                    cmd=f"ls -{ls_flags} {mount_point}/",
                 )
                 log.info(out)
         except FileNotFoundError as e:

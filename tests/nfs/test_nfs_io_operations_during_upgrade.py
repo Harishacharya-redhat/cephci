@@ -294,6 +294,7 @@ def perform_io_operations_in_loop(
     io_monitor=None,
     io_futures_total_timeout_s=None,
     command_timeout_s=None,
+    dd_command_timeout_s=None,
 ):
     """
     Perform IO operations on mounted NFS exports for single or multiple clusters.
@@ -354,7 +355,7 @@ def perform_io_operations_in_loop(
                                 f"{file_name}_{i}",
                                 dd_command_size_in_M,
                                 sudo,
-                                command_timeout_s,
+                                dd_command_timeout_s,
                             )
                         )
             _wait_io_futures(futures)
@@ -375,7 +376,7 @@ def perform_io_operations_in_loop(
                                 f"{file_name}_{i}",
                                 dd_command_size_in_M,
                                 sudo,
-                                command_timeout_s,
+                                dd_command_timeout_s,
                             )
                         )
             _wait_io_futures(futures)
@@ -539,6 +540,7 @@ def run(ceph_cluster, **kw):
     # Opt-in only: ``io_health_monitor: true`` in suite YAML (default off).
     from tests.nfs.nfs_io_health_monitor import (
         DEFAULT_IO_FUTURES_TOTAL_TIMEOUT_S,
+        DEFAULT_IO_SSH_DD_COMMAND_TIMEOUT_S,
         DEFAULT_IO_SSH_COMMAND_TIMEOUT_S,
         NfsIoHealthSlaBreached,
         NfsIoStaleMountError,
@@ -555,6 +557,11 @@ def run(ceph_cluster, **kw):
         command_timeout_s = DEFAULT_IO_SSH_COMMAND_TIMEOUT_S
     elif command_timeout_s is not None:
         command_timeout_s = float(command_timeout_s)
+    dd_command_timeout_s = config.get("io_ssh_dd_command_timeout_s")
+    if dd_command_timeout_s is None and io_health_monitor_enabled(config):
+        dd_command_timeout_s = DEFAULT_IO_SSH_DD_COMMAND_TIMEOUT_S
+    elif dd_command_timeout_s is not None:
+        dd_command_timeout_s = float(dd_command_timeout_s)
 
     io_monitor = create_paused_upgrade_io_monitor(
         config,
@@ -623,6 +630,7 @@ def run(ceph_cluster, **kw):
                 io_monitor=io_monitor,
                 io_futures_total_timeout_s=io_futures_total_timeout_s,
                 command_timeout_s=command_timeout_s,
+                dd_command_timeout_s=dd_command_timeout_s,
             )
 
             if io_monitor is not None:
