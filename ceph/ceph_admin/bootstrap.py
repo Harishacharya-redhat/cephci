@@ -44,6 +44,19 @@ def _detect_registry_tier(registry: str, build_type: str) -> str:
     return "cdn" if build_type in ("released", "cdn") else "stage"
 
 
+def _credential_tier_keys(tier: str, vendor: str) -> list:
+    """
+    Ordered nested credential keys to try for a detected tier and vendor.
+
+    IBM released registry credentials are stored under ``cp``
+    (see examples/cephci.yaml), while detection still reports ``cdn`` for
+    ``cp.icr.io`` to stay aligned with RH. Try both names.
+    """
+    if tier in ("cdn", "cp"):
+        return ["cp", "cdn"] if vendor == "ibm" else ["cdn", "cp"]
+    return [tier]
+
+
 def resolve_registry_login_args(
     registry: str,
     product: str = "redhat",
@@ -53,7 +66,7 @@ def resolve_registry_login_args(
     Resolve registry-login args (url/username/password) for a registry host.
 
     Registry tier is chosen from the registry hostname when it matches a known
-    RH/IBM host (cdn, stage, preprod); otherwise build_type is used
+    RH/IBM host (cdn/cp, stage, preprod); otherwise build_type is used
     (released/cdn -> cdn, else stage).
     """
     _vendor = "ibm" if "ibm" in product else "rh"
@@ -69,16 +82,23 @@ def resolve_registry_login_args(
         _vendor,
     )
 
-    # Prefer the nested credentials.registry.<vendor>.<tier> path which
-    # carries separate entries for cdn (cp.icr.io) vs stage (cp.stg.icr.io).
-    cdn_cred = (
-        _config.get("credentials", {}).get("registry", {}).get(_vendor, {}).get(_tier)
-    )
+    # Prefer nested credentials.registry.<vendor>.<tier> (IBM uses "cp" for
+    # released/cp.icr.io; RH uses "cdn"). Try vendor-appropriate aliases.
+    registry_creds = _config.get("credentials", {}).get("registry", {}).get(_vendor, {})
+    cdn_cred = None
+    for key in _credential_tier_keys(_tier, _vendor):
+        cdn_cred = registry_creds.get(key)
+        if cdn_cred:
+            break
 
     if not cdn_cred:
-        # Fall back to the flat top-level key (legacy config layout)
-        cdn_cred = _config.get(
-            f"{_vendor}_registry_credentials", _config["cdn_credentials"]
+        # Fall back to the flat top-level key (legacy config layout).
+        # Evaluate defaults lazily so a missing cdn_credentials does not
+        # raise KeyError when ibm/rh_registry_credentials is present.
+        cdn_cred = (
+            _config.get(f"{_vendor}_registry_credentials")
+            or _config.get("cdn_credentials")
+            or {}
         )
         if _tier and _reg:
             logger.warning(
@@ -119,7 +139,7 @@ def construct_registry(
         build_type: CLI build type (released|cdn|stage|nightly etc.)
 
     Registry tier is chosen from the registry hostname when it matches a known
-    RH/IBM host (cdn, stage, preprod); otherwise build_type is used
+    RH/IBM host (cdn/cp, stage, preprod); otherwise build_type is used
     (released/cdn -> cdn, else stage).
 
     Example::
