@@ -487,6 +487,15 @@ def run(ceph_cluster, **kw):
         return 1
 
     finally:
+        # Suite NFS (e.g. cephfs-nfs) often remains during upgrade suites;
+        # cleanup must not fail the test after rotate-key already passed.
         log.info("Cleaning up NFS cluster %r ...", nfs_name)
-        cleanup_cluster(clients, mount_point, nfs_name, nfs_export_base)
-        log.info("Cleanup done.")
+        try:
+            cleanup_cluster(clients, mount_point, nfs_name, nfs_export_base)
+            log.info("Cleanup done.")
+        except Exception as cleanup_exc:
+            log.warning(
+                "Cleanup of %r raised after test body finished: %s",
+                nfs_name,
+                cleanup_exc,
+            )

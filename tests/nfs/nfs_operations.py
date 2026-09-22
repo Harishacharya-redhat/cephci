@@ -1513,9 +1513,11 @@ def check_nfs_daemons_removed(client, nfs_name=None, prefix_cephadm=False):
     """Check NFS daemons are removed; verify deleted cluster deps are cleared.
 
     Use prefix_cephadm=True when running on installer (no host ceph binary).
+    When ``nfs_name`` is set, only that cluster must be gone — other NFS
+    services may remain (e.g. suite cluster during upgrade + rotate-key).
     """
     if not prefix_cephadm:
-        check_nfs_daemons_removed_retry(client)
+        check_nfs_daemons_removed_retry(client, nfs_name=nfs_name)
     if nfs_name:
         ceph_version = get_ceph_version(client, prefix_cephadm=prefix_cephadm)
         if ceph_version and LooseVersion(ceph_version) >= LooseVersion("20.2.2-75"):
@@ -1523,11 +1525,14 @@ def check_nfs_daemons_removed(client, nfs_name=None, prefix_cephadm=False):
 
 
 @retry(OperationFailedError, tries=30, delay=10, backoff=1)
-def check_nfs_daemons_removed_retry(client):
+def check_nfs_daemons_removed_retry(client, nfs_name=None):
     """
     Helper function to check if NFS daemons are removed.
     Raises OperationFailedError if daemons are still present (to trigger retry).
-    Returns True if all daemons are removed.
+    Returns True if removed.
+
+    If ``nfs_name`` is provided (str or list), only those ``nfs.<name>``
+    services must be absent. Other NFS clusters may still be running.
     """
     # We are increasing the timeout to 300 seconds to avoid the timeout error
     # with some of the QoS tests which were intermittently failing to cleanup
@@ -1537,8 +1542,29 @@ def check_nfs_daemons_removed_retry(client):
     if "No services reported" in out:
         log.info("All NFS daemons have been removed.")
         return True
-    else:
+
+    if nfs_name is None:
         raise OperationFailedError("NFS daemons still present")
+
+    names = [nfs_name] if isinstance(nfs_name, str) else list(nfs_name)
+    wanted = {f"nfs.{n}" for n in names}
+    still_present = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or line.startswith("NAME"):
+            continue
+        svc = line.split()[0]
+        if svc in wanted or any(svc.startswith(f"{w}.") for w in wanted):
+            still_present.append(svc)
+    if still_present:
+        raise OperationFailedError(
+            f"NFS daemon(s) still present for {names}: {still_present}"
+        )
+    log.info(
+        "NFS cluster(s) %s removed (other NFS services may remain).",
+        names,
+    )
+    return True
 
 
 def _orch_ps_json_stdout(installer_node, cmd):
