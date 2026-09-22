@@ -31,35 +31,46 @@ def lookup_in_directory(client, mount, sudo=True):
         return False
 
 
-def create_file(client, nfs_mount, file_name, sudo=True):
+def create_file(client, nfs_mount, file_name, sudo=True, command_timeout_s=None):
     """Create a file in the NFS mount point"""
     try:
         if file_name not in client.get_dir_list(nfs_mount, sudo=True):
             cmd = f"touch {nfs_mount}/{file_name}"
-            client.exec_command(cmd=cmd, sudo=sudo)
+            kw = {"sudo": sudo}
+            if command_timeout_s is not None:
+                kw["timeout"] = command_timeout_s
+            client.exec_command(cmd=cmd, **kw)
             log.info("File - {0} created successfully".format(file_name))
     except Exception as e:
         log.error(f"Failed to create file {file_name}: {e}")
         raise OperationFailedError(f"Failed to create file {file_name}: {e}")
 
 
-def delete_file(client, nfs_mount, file_name, sudo=True):
+def delete_file(client, nfs_mount, file_name, sudo=True, command_timeout_s=None):
     """Delete a file in the NFS mount point"""
     try:
         cmd = f"rm -rf {nfs_mount}/{file_name}"
-        client.exec_command(cmd=cmd, sudo=sudo)
+        kw = {"sudo": sudo}
+        if command_timeout_s is not None:
+            kw["timeout"] = command_timeout_s
+        client.exec_command(cmd=cmd, **kw)
         log.info("File - {0} deleted successfully".format(file_name))
     except Exception as e:
         log.error(f"Failed to delete file {file_name}: {e}")
         raise OperationFailedError(f"Failed to delete file {file_name}: {e}")
 
 
-def rename_file(client, nfs_mount, old_name, new_name, sudo=True):
+def rename_file(
+    client, nfs_mount, old_name, new_name, sudo=True, command_timeout_s=None
+):
     """Rename a file in the NFS mount point"""
     try:
         if new_name not in client.get_dir_list(nfs_mount, sudo=True):
             cmd = f"mv {nfs_mount}/{old_name} {nfs_mount}/{new_name}"
-            client.exec_command(cmd=cmd, sudo=sudo)
+            kw = {"sudo": sudo}
+            if command_timeout_s is not None:
+                kw["timeout"] = command_timeout_s
+            client.exec_command(cmd=cmd, **kw)
             log.info("File renamed successfully")
     except Exception as e:
         log.error(f"Failed to rename file {old_name} to {new_name}: {e}")
@@ -68,22 +79,32 @@ def rename_file(client, nfs_mount, old_name, new_name, sudo=True):
         )
 
 
-def write_to_file_using_dd_command(client, nfs_mount, file_name, size, sudo=True):
+def write_to_file_using_dd_command(
+    client, nfs_mount, file_name, size, sudo=True, command_timeout_s=None
+):
     """Write to a file in the NFS mount point using dd command"""
     try:
         cmd = f"dd if=/dev/zero of={nfs_mount}/{file_name} bs={size}M count=5"
-        client.exec_command(cmd=cmd, sudo=sudo)
+        kw = {"sudo": sudo}
+        if command_timeout_s is not None:
+            kw["timeout"] = command_timeout_s
+        client.exec_command(cmd=cmd, **kw)
         log.info("File written successfully")
     except Exception as e:
         log.error(f"Failed to write to file {file_name}: {e}")
         raise OperationFailedError(f"Failed to write to file {file_name}: {e}")
 
 
-def read_from_file_using_dd_command(client, nfs_mount, file_name, size, sudo=True):
+def read_from_file_using_dd_command(
+    client, nfs_mount, file_name, size, sudo=True, command_timeout_s=None
+):
     """Read from a file in the NFS mount point using dd command"""
     try:
         cmd = f"dd if={nfs_mount}/{file_name} of=/dev/null bs={size}M count=5"
-        client.exec_command(cmd=cmd, sudo=sudo)
+        kw = {"sudo": sudo}
+        if command_timeout_s is not None:
+            kw["timeout"] = command_timeout_s
+        client.exec_command(cmd=cmd, **kw)
         log.info("File read successfully")
     except Exception as e:
         log.error(f"Failed to read from file {file_name}: {e}")

@@ -17,6 +17,8 @@ Suite config keys:
     heartbeat_log_tail_lines (int): lines shown per client tail in main log (default 20)
     heartbeat_filename (str): heartbeat file under each mount (default .nfs_io_heartbeat)
     io_health_monitor_mount_prefix (str): probe mounts under this path (default /mnt)
+    io_futures_total_timeout_s (float): max wait per IO futures batch (default 3600)
+    io_ssh_command_timeout_s (float): per remote file-op SSH timeout (optional)
 """
 
 from __future__ import annotations
@@ -49,6 +51,8 @@ DEFAULT_HEARTBEAT_TAIL_INTERVAL_S = 20.0
 DEFAULT_HEALTH_POLL_INTERVAL_S = 2.0
 DEFAULT_LOG_TAIL_LINES = 20
 DEFAULT_MOUNT_PATH_PREFIX = "/mnt"
+DEFAULT_IO_FUTURES_TOTAL_TIMEOUT_S = 3600.0
+DEFAULT_IO_SSH_COMMAND_TIMEOUT_S = 600.0
 REMOTE_SCRIPT_PATH = "/tmp/cephci_nfs_io_heartbeat.sh"
 REMOTE_LOG_PATH = "/tmp/cephci_nfs_io_heartbeat.log"
 REMOTE_CONTROL_PATH = "/tmp/cephci_nfs_io_heartbeat.control"
@@ -631,7 +635,7 @@ class NfsIoHealthMonitor:
                 log.error(summary, *args)
             else:
                 log.info(summary, *args)
-            self._log_client_heartbeat_counts()
+        self._log_client_heartbeat_counts()
 
     def _log_client_heartbeat_counts(self) -> None:
         """Log per-client OK heartbeat totals and which client recorded the most."""
@@ -1055,6 +1059,7 @@ def run_monitor_self_check() -> int:
     monitor.resume()
     monitor._tail_client_log(client, final=False)
     monitor.stop(reason="self_check")
+    monitor.log_status_summary(reason="self_check_summary")
 
     if not client.deployed:
         log.error("Self-check failed: script was not deployed")

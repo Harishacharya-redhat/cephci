@@ -129,6 +129,13 @@ class parallel:
         # Graceful shutdown of running threads
         if _not_done:
             self._executor.shutdown(wait=False, cancel_futures=self._cancel_pending)
+            if exc_value is not None:
+                logger.exception(trackback)
+                return False
+            _budget = self._timeout if self._timeout else 3600
+            raise TimeoutError(
+                f"{len(_not_done)} parallel task(s) did not complete within {_budget}s"
+            )
 
         if exc_value is not None:
             logger.exception(trackback)

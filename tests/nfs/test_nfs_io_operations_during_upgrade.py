@@ -1,6 +1,6 @@
 import json
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from time import sleep
+from time import monotonic, sleep
 
 from ceph.waiter import WaitUntil
 from cli.ceph.ceph import Ceph
@@ -28,12 +28,25 @@ from utility.log import Log
 log = Log(__name__)
 
 
-def _wait_futures_with_health_check(futures, io_monitor=None, poll_timeout_s=2.0):
+def _wait_futures_with_health_check(
+    futures,
+    io_monitor=None,
+    poll_timeout_s=2.0,
+    total_timeout_s=None,
+):
     """Wait for futures while polling the I/O health monitor for critical failures."""
     pending = set(futures)
+    deadline = None
+    if total_timeout_s is not None:
+        deadline = monotonic() + float(total_timeout_s)
     while pending:
         if io_monitor is not None:
             io_monitor.raise_if_unhealthy()
+        if deadline is not None and monotonic() >= deadline:
+            raise TimeoutError(
+                f"NFS I/O operations did not complete within {total_timeout_s}s "
+                f"({len(pending)} task(s) still pending)"
+            )
         done, pending = wait(
             pending,
             timeout=poll_timeout_s,
@@ -279,6 +292,8 @@ def perform_io_operations_in_loop(
     multicluster=False,
     sudo=True,
     io_monitor=None,
+    io_futures_total_timeout_s=None,
+    command_timeout_s=None,
 ):
     """
     Perform IO operations on mounted NFS exports for single or multiple clusters.
@@ -294,6 +309,13 @@ def perform_io_operations_in_loop(
     """
     file_name = "created_during_upgrade_file"
     renamed_file_name = "re_renamed_during_upgrade_file"
+
+    def _wait_io_futures(futures):
+        _wait_futures_with_health_check(
+            futures,
+            io_monitor=io_monitor,
+            total_timeout_s=io_futures_total_timeout_s,
+        )
 
     def _process_single_cluster(mount_dict):
         """Helper function to process IO for a single cluster's mounts"""
@@ -311,9 +333,10 @@ def perform_io_operations_in_loop(
                                 mount,
                                 f"{file_name}_{i}",
                                 sudo,
+                                command_timeout_s,
                             )
                         )
-            _wait_futures_with_health_check(futures, io_monitor=io_monitor)
+            _wait_io_futures(futures)
         log.info("File creation completed")
 
         # Write to files using dd
@@ -331,9 +354,10 @@ def perform_io_operations_in_loop(
                                 f"{file_name}_{i}",
                                 dd_command_size_in_M,
                                 sudo,
+                                command_timeout_s,
                             )
                         )
-            _wait_futures_with_health_check(futures, io_monitor=io_monitor)
+            _wait_io_futures(futures)
         log.info("Write operations completed")
 
         # Read from files using dd
@@ -351,9 +375,10 @@ def perform_io_operations_in_loop(
                                 f"{file_name}_{i}",
                                 dd_command_size_in_M,
                                 sudo,
+                                command_timeout_s,
                             )
                         )
-            _wait_futures_with_health_check(futures, io_monitor=io_monitor)
+            _wait_io_futures(futures)
         log.info("Read operations completed")
 
         # Rename files
@@ -371,9 +396,10 @@ def perform_io_operations_in_loop(
                                 f"{file_name}_{i}",
                                 f"{renamed_file_name}_{i}",
                                 sudo,
+                                command_timeout_s,
                             )
                         )
-            _wait_futures_with_health_check(futures, io_monitor=io_monitor)
+            _wait_io_futures(futures)
         log.info("Rename operations completed")
 
         # Delete files
@@ -390,9 +416,10 @@ def perform_io_operations_in_loop(
                                 mount,
                                 f"{renamed_file_name}_{i}",
                                 sudo,
+                                command_timeout_s,
                             )
                         )
-            _wait_futures_with_health_check(futures, io_monitor=io_monitor)
+            _wait_io_futures(futures)
         log.info("Delete operations completed")
 
     if multicluster:
@@ -511,11 +538,23 @@ def run(ceph_cluster, **kw):
 
     # Opt-in only: ``io_health_monitor: true`` in suite YAML (default off).
     from tests.nfs.nfs_io_health_monitor import (
+        DEFAULT_IO_FUTURES_TOTAL_TIMEOUT_S,
+        DEFAULT_IO_SSH_COMMAND_TIMEOUT_S,
         NfsIoHealthSlaBreached,
         NfsIoStaleMountError,
         NfsIoStallFailedError,
         create_paused_upgrade_io_monitor,
+        io_health_monitor_enabled,
     )
+
+    io_futures_total_timeout_s = float(
+        config.get("io_futures_total_timeout_s", DEFAULT_IO_FUTURES_TOTAL_TIMEOUT_S)
+    )
+    command_timeout_s = config.get("io_ssh_command_timeout_s")
+    if command_timeout_s is None and io_health_monitor_enabled(config):
+        command_timeout_s = DEFAULT_IO_SSH_COMMAND_TIMEOUT_S
+    elif command_timeout_s is not None:
+        command_timeout_s = float(command_timeout_s)
 
     io_monitor = create_paused_upgrade_io_monitor(
         config,
@@ -582,6 +621,8 @@ def run(ceph_cluster, **kw):
                 dd_command_size_in_M,
                 sudo=sudo,
                 io_monitor=io_monitor,
+                io_futures_total_timeout_s=io_futures_total_timeout_s,
+                command_timeout_s=command_timeout_s,
             )
 
             if io_monitor is not None:
