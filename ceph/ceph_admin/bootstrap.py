@@ -44,36 +44,17 @@ def _detect_registry_tier(registry: str, build_type: str) -> str:
     return "cdn" if build_type in ("released", "cdn") else "stage"
 
 
-def construct_registry(
-    cls,
+def resolve_registry_login_args(
     registry: str,
-    json_file: bool = False,
     product: str = "redhat",
     build_type: str = "released",
-):
+) -> Dict:
     """
-    Construct registry credentials for bootstrapping cluster
-
-    Args:
-        cls (CephAdmin): class object
-        registry (Str): registry name
-        json_file (Bool): registry credentials in JSON file (default:False)
-        product: ceph product - ibm/redhat
-        build_type: CLI build type (released|cdn|stage|nightly etc.)
+    Resolve registry-login args (url/username/password) for a registry host.
 
     Registry tier is chosen from the registry hostname when it matches a known
     RH/IBM host (cdn, stage, preprod); otherwise build_type is used
     (released/cdn -> cdn, else stage).
-
-    Example::
-
-        json_file:
-            - False : Constructs registry credentials for bootstrap
-            - True  : Creates file with registry name attached with it,
-                      and saved as /tmp/<registry>.json file.
-
-    Returns:
-        constructed string of registry credentials ( Str )
     """
     _vendor = "ibm" if "ibm" in product else "rh"
 
@@ -113,11 +94,47 @@ def construct_registry(
         registry_url = _reg
     else:
         registry_url = cdn_cred.get("registry") or _reg
-    reg_args = {
+    return {
         "registry-url": registry_url,
         "registry-username": cdn_cred.get("username"),
         "registry-password": cdn_cred.get("password"),
     }
+
+
+def construct_registry(
+    cls,
+    registry: str,
+    json_file: bool = False,
+    product: str = "redhat",
+    build_type: str = "released",
+):
+    """
+    Construct registry credentials for bootstrapping cluster
+
+    Args:
+        cls (CephAdmin): class object
+        registry (Str): registry name
+        json_file (Bool): registry credentials in JSON file (default:False)
+        product: ceph product - ibm/redhat
+        build_type: CLI build type (released|cdn|stage|nightly etc.)
+
+    Registry tier is chosen from the registry hostname when it matches a known
+    RH/IBM host (cdn, stage, preprod); otherwise build_type is used
+    (released/cdn -> cdn, else stage).
+
+    Example::
+
+        json_file:
+            - False : Constructs registry credentials for bootstrap
+            - True  : Creates file with registry name attached with it,
+                      and saved as /tmp/<registry>.json file.
+
+    Returns:
+        constructed string of registry credentials ( Str )
+    """
+    reg_args = resolve_registry_login_args(
+        registry, product=product, build_type=build_type
+    )
     if json_file:
         reg = dict((k.lstrip("registry-"), v) for k, v in reg_args.items())
 
