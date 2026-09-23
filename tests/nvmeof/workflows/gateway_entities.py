@@ -366,18 +366,33 @@ def configure_namespaces(gateway, config, opt_args={}, rbd_obj=None):
                 if bdev_cfg.get("pool"):
                     namespace_args.update({"rbd-pool": bdev_cfg["pool"]})
 
+                data_pool = bdev_cfg.get("data_pool") or bdev_cfg.get("rbd-data-pool")
+                if data_pool:
+                    namespace_args.update({"rbd-data-pool": data_pool})
+
                 rados_namespace = bdev_cfg.get(
                     "rados_namespace", sub_cfg.get("rados_namespace")
                 )
                 if rados_namespace:
                     namespace_args.update({"rados-namespace": rados_namespace})
 
+                # BYOK LUKS encryption (9.2+) — all three keys are optional;
+                # absent means plain namespace (zero impact on existing callers).
+                if bdev_cfg.get("encryption-format"):
+                    namespace_args["encryption-format"] = bdev_cfg["encryption-format"]
+                if bdev_cfg.get("encryption-algorithm"):
+                    namespace_args["encryption-algorithm"] = bdev_cfg[
+                        "encryption-algorithm"
+                    ]
+                if bdev_cfg.get("key-id"):
+                    namespace_args["key-id"] = bdev_cfg["key-id"]
+
                 # consider adding option to create pool and image if it doesn't exist
                 # and also ns_create_image is false
                 if bdev_cfg.get("ns_create_image"):
                     namespace_args.update(
                         {
-                            "size": bdev_cfg.get("size", "1G"),
+                            "rbd-image-size": bdev_cfg.get("size", "1G"),
                             "rbd-create-image": bdev_cfg.get("ns_create_image", True),
                         }
                     )
@@ -388,12 +403,21 @@ def configure_namespaces(gateway, config, opt_args={}, rbd_obj=None):
                                 pool = bdev_cfg.get(
                                     "pool", config.get("rbd_pool", "rbd")
                                 )
-                                p.spawn(
-                                    rbd_obj.initial_rbd_config,
-                                    pool=pool,
-                                    image=f"{name}-image{num}",
-                                    size=bdev_cfg.get("size", "1G"),
-                                )
+                                image = f"{name}-image{num}"
+                                size = bdev_cfg.get("size", "1G")
+                                if data_pool:
+                                    cmd = (
+                                        f"rbd create {pool}/{image} --size {size} "
+                                        f"--data-pool {data_pool}"
+                                    )
+                                    p.spawn(rbd_obj.exec_cmd, cmd=cmd)
+                                else:
+                                    p.spawn(
+                                        rbd_obj.initial_rbd_config,
+                                        pool=pool,
+                                        image=image,
+                                        size=size,
+                                    )
                             else:
                                 raise ValueError(
                                     "RBD object not provided for pre-creating RBD image"
@@ -618,27 +642,39 @@ def teardown(nvme_service, rbd_obj, cleanup_config=None):
     if "initiators" in nvme_service.config.get("cleanup", []):
         disconnect_initiators(nvme_service)
 
-    # Delete the multiple subsystems across multiple gateways
+    # Delete the multiple subsystems across multiple gateways.
+    # Wrapped in try/except so that a "No such subsystem" error (e.g. when the
+    # test failed before the subsystem was ever created) does not abort teardown
+    # and leave the gateway service running — which would block the next test
+    # from deploying its own gateway on the same nodes.
     if "subsystems" in nvme_service.config["cleanup"]:
         config_sub_node = nvme_service.config["subsystems"]
         if not isinstance(config_sub_node, list):
             config_sub_node = [config_sub_node]
         for sub_cfg in config_sub_node:
             gateway = nvme_service.gateways[0]
-            out, err = gateway.subsystem.delete(
-                **{"args": {"subsystem": sub_cfg["nqn"], "force": True}}
-            )
-            if "success" not in out.lower():
-                LOG.warning(
-                    f"Failed to delete subsystem {sub_cfg['nqn']}: {out} with error {err}"
+            try:
+                out, err = gateway.subsystem.delete(
+                    **{"args": {"subsystem": sub_cfg["nqn"], "force": True}}
                 )
-                rc = 1
+                if "success" not in out.lower():
+                    LOG.warning(
+                        f"Failed to delete subsystem {sub_cfg['nqn']}: {out} with error {err}"
+                    )
+                    rc = 1
+            except Exception as exc:
+                LOG.warning(
+                    "Subsystem %s delete raised %s — skipping (subsystem may not exist yet)",
+                    sub_cfg["nqn"],
+                    exc,
+                )
 
-    # Delete gateways
+    # Delete gateways — always attempted even if subsystem cleanup above failed.
     if "gateway" in nvme_service.config.get("cleanup", []):
-        rc = nvme_service.delete_nvme_service()
-        if rc != 0:
+        gw_rc = nvme_service.delete_nvme_service()
+        if gw_rc != 0:
             LOG.warning("Failed to delete NVMe gateways")
+            rc = gw_rc
 
     # Delete the pool
     if "pool" in nvme_service.config["cleanup"]:

@@ -1,4 +1,5 @@
 from threading import Thread
+from time import monotonic, sleep
 
 from nfs_operations import (
     cleanup_cluster,
@@ -13,17 +14,36 @@ from utility.log import Log
 
 log = Log(__name__)
 
+COPY_WORK_SUBDIR = "cephci_copy_test"
+WAIT_REMOTE_PATH_TIMEOUT_S = 120
+
+
+def _wait_remote_path(client, path, sudo=False, timeout_s=WAIT_REMOTE_PATH_TIMEOUT_S):
+    deadline = monotonic() + timeout_s
+    while monotonic() < deadline:
+        out, _ = client.exec_command(
+            sudo=sudo,
+            cmd=f"test -e {path} && echo ok",
+            check_ec=False,
+        )
+        if "ok" in out:
+            return
+        sleep(1)
+    raise OperationFailedError(f"timed out waiting for {path} on {client.hostname}")
+
 
 def create_copy_files(mount_point, num_files, client1, client2, sudo=False):
     for i in range(1, num_files + 1):
+        src = f"{mount_point}/file{i}"
         try:
             client1.exec_command(
                 sudo=sudo,
-                cmd=f"dd if=/dev/urandom of={mount_point}/file{i} bs=1 count=1",
+                cmd=f"dd if=/dev/urandom of={src} bs=1 count=1",
             )
+            _wait_remote_path(client2, src, sudo=sudo)
             client2.exec_command(
                 sudo=sudo,
-                cmd=f"cp {mount_point}/file{i} {mount_point}/copyfile{i}",
+                cmd=f"cp {src} {mount_point}/copyfile{i}",
             )
         except Exception as e:
             log.error(f"Failed to create/copy file{i}: {e}")
@@ -32,14 +52,16 @@ def create_copy_files(mount_point, num_files, client1, client2, sudo=False):
 
 def create_copy_dirs(mount_point, num_dirs, client1, client2, sudo=False):
     for i in range(1, num_dirs + 1):
+        src = f"{mount_point}/dir{i}"
         try:
             client1.exec_command(
                 sudo=sudo,
-                cmd=f"mkdir {mount_point}/dir{i}",
+                cmd=f"mkdir {src}",
             )
+            _wait_remote_path(client2, src, sudo=sudo)
             client2.exec_command(
                 sudo=sudo,
-                cmd=f"cp -r {mount_point}/dir{i} {mount_point}/copydir{i}",
+                cmd=f"cp -r {src} {mount_point}/copydir{i}",
             )
         except Exception as e:
             log.error(f"Failed to create/copy directory dir{i}: {e}")
@@ -92,22 +114,29 @@ def run(ceph_cluster, **kw):
             enable_rdma=config.get("enable_rdma", False),
             rdma_port=config.get("rdma_port"),
         )
+        work_mount = f"{nfs_mount}/{COPY_WORK_SUBDIR}"
+        clients[0].exec_command(
+            sudo=sudo,
+            cmd=f"mkdir -p {work_mount} && chmod a+rwx {work_mount}",
+        )
+
         # Create files and dirs from client 1 and copy files and dirs from client 2
         client1 = clients[0]
         client2 = clients[1]
+        lookup_iterations = min(int(num_files) + int(num_dirs), 50)
         operations = [
             Thread(
                 target=create_copy_files,
-                args=(nfs_mount, num_files, client1, client2, sudo),
+                args=(work_mount, num_files, client1, client2, sudo),
             ),
             Thread(
                 target=create_copy_dirs,
-                args=(nfs_mount, num_dirs, client1, client2, sudo),
+                args=(work_mount, num_dirs, client1, client2, sudo),
             ),
             Thread(
                 target=perform_lookups,
-                args=(clients[2], nfs_mount, num_files + num_dirs),
-                kwargs={"sudo": sudo, "timeout": 60},
+                args=(clients[2], work_mount, lookup_iterations),
+                kwargs={"sudo": sudo, "recursive": False},
             ),
         ]
 

@@ -418,7 +418,7 @@ def run(ceph_cluster, **kw):
         nfs_mount (str): client mount point, default "/mnt/nfs_cephx"
 
     Returns:
-        0 on success, 1 on failure.
+        0 on success, 1 on failure, -1 if rotate-key is absent (pre-CephX).
     """
     config = kw.get("config", {})
 
@@ -444,7 +444,7 @@ def run(ceph_cluster, **kw):
             "TEST SKIPPED - ceph nfs cluster rotate-key not in "
             "'ceph nfs cluster --help' (pre-CephX build)"
         )
-        return 0
+        return -1
 
     # All NFS hostnames so CephX keys register on every NFS daemon.
     nfs_server_hostnames = [n.hostname for n in nfs_nodes]
@@ -487,6 +487,15 @@ def run(ceph_cluster, **kw):
         return 1
 
     finally:
+        # Suite NFS (e.g. cephfs-nfs) often remains during upgrade suites;
+        # cleanup must not fail the test after rotate-key already passed.
         log.info("Cleaning up NFS cluster %r ...", nfs_name)
-        cleanup_cluster(clients, mount_point, nfs_name, nfs_export_base)
-        log.info("Cleanup done.")
+        try:
+            cleanup_cluster(clients, mount_point, nfs_name, nfs_export_base)
+            log.info("Cleanup done.")
+        except Exception as cleanup_exc:
+            log.warning(
+                "Cleanup of %r raised after test body finished: %s",
+                nfs_name,
+                cleanup_exc,
+            )

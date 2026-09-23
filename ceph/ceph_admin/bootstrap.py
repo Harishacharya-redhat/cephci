@@ -32,11 +32,13 @@ __DEFAULT_SSH_PATH = "/etc/ceph/ceph.pub"
 
 
 def _detect_registry_tier(registry: str, build_type: str) -> str:
-    """Return credential tier (cdn/stage) from registry host, else from build_type."""
+    """Return credential tier (cdn/stage/preprod) from registry host, else from build_type."""
     if not registry:
         return "cdn" if build_type in ("released", "cdn") else "stage"
     if "registry.redhat.io" in registry or "cp.icr.io" in registry:
         return "cdn"
+    if "preprod.icr.io" in registry:
+        return "preprod"
     if "stage" in registry or "stg" in registry or "quay" in registry:
         return "stage"
     return "cdn" if build_type in ("released", "cdn") else "stage"
@@ -60,7 +62,8 @@ def construct_registry(
         build_type: CLI build type (released|cdn|stage|nightly etc.)
 
     Registry tier is chosen from the registry hostname when it matches a known
-    RH/IBM host; otherwise build_type is used (released/cdn -> cdn, else stage).
+    RH/IBM host (cdn, stage, preprod); otherwise build_type is used
+    (released/cdn -> cdn, else stage).
 
     Example::
 
@@ -96,8 +99,22 @@ def construct_registry(
         cdn_cred = _config.get(
             f"{_vendor}_registry_credentials", _config["cdn_credentials"]
         )
+        if _tier and _reg:
+            logger.warning(
+                "No credentials for registry tier '%s'; using legacy %s_registry_credentials",
+                _tier,
+                _vendor,
+            )
+    # IBM: authenticate at the image host (preprod.icr.io / cp.stg.icr.io).
+    # RH:  authenticate at the credential registry (usually registry.stage.redhat.io),
+    #      not at the image pull host (quay.io).  Logging into quay.io with stage
+    #      credentials triggers 429 rate-limits on the shared qa@redhat.com account.
+    if _vendor == "ibm" and _reg:
+        registry_url = _reg
+    else:
+        registry_url = cdn_cred.get("registry") or _reg
     reg_args = {
-        "registry-url": cdn_cred.get("registry", registry),
+        "registry-url": registry_url,
         "registry-username": cdn_cred.get("username"),
         "registry-password": cdn_cred.get("password"),
     }
@@ -334,18 +351,27 @@ class BootstrapMixin:
         registry_url = args.pop("registry-url", None)
         registry_json = args.pop("registry-json", None)
 
-        # Auto-detect registry from custom_image or container image and add credentials if needed
+        # Auto-detect the image host for IBM builds (preprod.icr.io / cp.stg.icr.io).
+        # For RH builds the image may be pulled from quay.io via a lab mirror; the
+        # login target is the stage registry in .cephci.yaml, NOT the pull host.
         if custom_image and isinstance(custom_image, str):
             image_registry = custom_image.split("/")[0]
         else:
             image_registry = self.config["container_image"].split("/")[0]
 
-        registry_url = image_registry
-        logger.info(
-            f"Auto-detected registry {registry_url} from container image, adding credentials"
-        )
+        if manifest_obj.product == "ibm":
+            registry_url = image_registry
+            logger.info(f"IBM build: using image host {registry_url!r} as registry-url")
+        else:
+            # Pass empty string so construct_registry() falls back to
+            # cdn_cred.get("registry") — i.e. registry.stage.redhat.io from .cephci.yaml.
+            registry_url = ""
+            logger.info(
+                f"RH build: image host is {image_registry!r}; "
+                "registry-url will be taken from credential file"
+            )
 
-        if registry_url or manifest_obj.product == "ibm":
+        if registry_url or manifest_obj.product in ("ibm", "redhat"):
             cmd += construct_registry(
                 self,
                 registry_url,
@@ -354,9 +380,14 @@ class BootstrapMixin:
             )
 
         if registry_json:
+            # Suite YAML often hardcodes registry.redhat.io for RH test_bootstrap
+            # cases; for IBM builds use the image registry host in registry-json.
+            json_registry = registry_json
+            if manifest_obj.product == "ibm" and image_registry:
+                json_registry = image_registry
             cmd += construct_registry(
                 self,
-                registry_json,
+                json_registry,
                 json_file=True,
                 product=manifest_obj.product,
                 build_type=build_type,

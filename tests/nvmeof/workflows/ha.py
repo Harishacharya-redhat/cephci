@@ -718,10 +718,20 @@ class HighAvailability:
                             )
                             validate_initiator(self.clients, active_gw_obj, ns_list, gw)
 
-                        # Wait for IO to complete and collect FIO outputs
+                        # Stop FIO and collect outputs.
+                        # cancel_futures=True only prevents queued futures from
+                        # starting; it does NOT interrupt threads already running
+                        # fio to 100%.  Kill the remote fio process on every
+                        # initiator node first so the blocked threads unblock
+                        # quickly, then shut down the pool.
                         fio_outputs = []
                         if io_tasks:
-                            LOG.info("Waiting for completion of IOs.")
+                            LOG.info(
+                                "Stopping IO on all initiator nodes before executor shutdown."
+                            )
+                            for initiator in self.clients:
+                                initiator.stop_fio()
+                            LOG.info("Shutting down IO executor.")
                             executor.shutdown(wait=True, cancel_futures=True)
 
                             for task in io_tasks:
@@ -788,10 +798,15 @@ class HighAvailability:
 
                             LOG.info("Validating IO after failback")
                             validate_io(self.orch, namespaces_for_io)
-                            # Wait for IO to complete and collect FIO outputs
+                            # Stop FIO and collect outputs (same pattern as failover).
                             fio_outputs = []
                             if io_tasks:
-                                LOG.info("Waiting for completion of IOs.")
+                                LOG.info(
+                                    "Stopping IO on all initiator nodes before executor shutdown."
+                                )
+                                for initiator in self.clients:
+                                    initiator.stop_fio()
+                                LOG.info("Shutting down IO executor.")
                                 executor.shutdown(wait=True, cancel_futures=True)
 
                                 for task in io_tasks:
