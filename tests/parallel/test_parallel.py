@@ -64,12 +64,28 @@ def run(**kwargs):
         results = dict(results)
         parallel_log.info(f"Final test results: {results}")
         parallel_log.info(f"Parallel test cases: {parallel_tcs}")
+        # NFS IO during upgrade is abort-on-fail: false. Keep that child
+        # Failed in the report, but do not fail the parallel parent.
+        nonfatal = set()
+        for spec in parallel_tests:
+            child = spec.get("test", {})
+            if (
+                child.get("abort-on-fail") is False
+                and child.get("module") == "test_nfs_io_operations_during_upgrade.py"
+            ):
+                nonfatal.add(child.get("name", "unknown_test").replace(" ", "_"))
         test_rc = 0
 
         for key, value in results.items():
             parallel_log.info(
                 f"{key} test result is {'PASS' if value == 0 else 'FAILED'}"
             )
+            if value != 0 and key in nonfatal:
+                parallel_log.info(
+                    f"{key} failed with abort-on-fail false; "
+                    "not failing the parallel parent"
+                )
+                continue
             if value != 0:
                 test_rc = value
 
