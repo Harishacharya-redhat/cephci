@@ -319,9 +319,12 @@ tests:
       polarion-id: CEPH-83633001
       abort-on-fail: false
       config:
+        setup: false
         nfs_version: 4.1
         clients: 1
-        nfs_name: cephfs-nfs-cephx
+        nfs_name: cephfs-nfs
+        nfs_mount: /mnt/nfs
+        nfs_export: /export_0
 
   - test:
       name: NFSv4 multiple operations - post_upgrade
