@@ -13,6 +13,52 @@ from utility.log import Log
 
 log = Log(__name__)
 
+# RHEL 9.4 and 9.6 BaseOS stop below OPENSSL_3.4.0. IBM Ceph 9.2 ceph-common
+# is built on RHEL 9.8 and needs that symbol. IBMCEPH-20644.
+_OPENSSL_WORKAROUND_RELEASES = ("9.4", "9.6")
+_OPENSSL_98_PACKAGES = (
+    "openssl-3.5.8-2.el9_8.x86_64 openssl-libs-3.5.8-2.el9_8.x86_64"
+)
+
+
+def install_rhel9_openssl_for_ceph_common(node) -> None:
+    """Install RHEL 9.8 openssl before IBM ceph-common on RHEL 9.4 and 9.6.
+
+    Sets the subscription release to 9.8 only for this install, then unsets it
+    so the rest of the node stays on its minor release. Call only for IBM builds.
+    """
+    version_id = str(node.distro_info.get("VERSION_ID", ""))
+    parts = version_id.split(".")
+    if len(parts) < 2 or f"{parts[0]}.{parts[1]}" not in _OPENSSL_WORKAROUND_RELEASES:
+        return
+
+    log.info(
+        "Installing %s on %s (RHEL %s) before ceph-common",
+        _OPENSSL_98_PACKAGES,
+        node.hostname,
+        version_id,
+    )
+    node.exec_command(sudo=True, cmd="subscription-manager release --set=9.8")
+    try:
+        node.exec_command(
+            sudo=True,
+            cmd=f"dnf install -y {_OPENSSL_98_PACKAGES}",
+            timeout=1800,
+        )
+    finally:
+        node.exec_command(
+            sudo=True,
+            cmd="subscription-manager release --unset",
+            check_ec=False,
+        )
+
+    out, _ = node.exec_command(sudo=True, cmd="rpm -q openssl openssl-libs")
+    log.info(out)
+    node.exec_command(
+        sudo=True,
+        cmd="rpm -q --provides openssl-libs | grep OPENSSL_3.4.0",
+    )
+
 
 def add(cls, config: Dict) -> None:
     """configure client using the provided configuration.
@@ -195,6 +241,8 @@ def add(cls, config: Dict) -> None:
                 _manifest = manifest_obj or cls.config.get("manifest")
                 if _manifest and _manifest.product == "ibm":
                     setup_ibm_licence(_node, build_type=_manifest.build_type)
+                    # IBM ceph-common is built on RHEL 9.8. RH packages are not.
+                    install_rhel9_openssl_for_ceph_common(_node)
 
                 for pkg in config.get("install_packages"):
                     if _rpm_version:
