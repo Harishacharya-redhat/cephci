@@ -218,6 +218,9 @@ tests:
   - test:
       name: Upgrade along with IOs for nfs
       module: test_parallel.py
+      config:
+        max_time: 14400
+        cancel_pending: true
       desc: Upgrade along with IOs for nfs in parallel
       parallel:
         - test:
@@ -246,7 +249,24 @@ tests:
               dd_command_size_in_M: 10
               exports_number: 4
               loop_count: 4
+              io_health_monitor: true
+              stall_threshold_s: 5
+              stall_recovery_timeout_s: 100
+              probe_interval_s: 1
       abort-on-fail: true
+
+  - test:
+      name: Nfs Ganesha metrics validation - post_upgrade
+      module: test_nfs_ganesha_metrics_upgrade_validation.py
+      desc: Verify Enable_Metrics in ganesha.conf and monitoring port after upgrade
+      polarion-id: CEPH-83620035
+      abort-on-fail: true
+      config:
+        operation: after_upgrade
+        nfs_name: cephfs-nfs
+        monitoring_port: 9587
+        configure_metrics: false
+        ensure_monitoring_port: false
 
   - test:
       name: NFSv4 multiple operations - post_upgrade
@@ -262,19 +282,6 @@ tests:
         file_count: 50
         dd_command_size_in_M: 10
         operation: after_upgrade
-
-  - test:
-      name: Nfs Ganesha metrics validation - post_upgrade
-      module: test_nfs_ganesha_metrics_upgrade_validation.py
-      desc: Verify Enable_Metrics in ganesha.conf and monitoring port after upgrade
-      polarion-id: CEPH-83620035
-      abort-on-fail: true
-      config:
-        operation: after_upgrade
-        nfs_name: cephfs-nfs
-        monitoring_port: 9587
-        configure_metrics: false
-        ensure_monitoring_port: false
 
   - test:
       name: Nfs Verify rm write lookups in parellel from multi clients
