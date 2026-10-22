@@ -1,0 +1,113 @@
+# Suite: cephadm NFS Ganesha log_to_file (IBMCEPH-13289 / ceph#71198)
+# Conf: conf/tentacle/nfs/1admin-7node-3client.yaml
+#
+# Early automation. Do not add this suite to tentacle 9.2 shared CI until a
+# 10.0 build contains the PR. Upgrade suites already set log_to_file at
+# bootstrap and must not gain this assertion until the redeploy-loop case
+# has passed on its own.
+#
+# cases: all runs the sign-off set (LF0, LF1, LF2, LF3, LF7, LF5) and then
+# LF6, LF4, LF9, LF10, LF8. Set cases: signoff to stop after the minimum.
+# stability_seconds is the LF5 window. followup_stability_seconds covers
+# LF6 and LF9.
+
+tests:
+  - test:
+      abort-on-fail: true
+      desc: Install software pre-requisites for cluster deployment.
+      module: install_prereq.py
+      name: setup pre-requisites
+
+  - test:
+      abort-on-fail: true
+      config:
+        steps:
+          - config:
+              command: bootstrap
+              service: cephadm
+              args:
+                mon-ip: node1
+          - config:
+              command: add_hosts
+              service: host
+              args:
+                attach_ip_address: true
+                labels: apply-all-labels
+          - config:
+              command: apply
+              service: osd
+              args:
+                all-available-devices: true
+          - config:
+              command: apply
+              service: rgw
+              pos_args:
+                - rgw.1
+              args:
+                placement:
+                  label: rgw
+          - config:
+              args:
+                - "ceph fs volume create cephfs"
+              command: shell
+          - config:
+              args:
+                placement:
+                  label: mds
+              base_cmd_args:
+                verbose: true
+              command: apply
+              pos_args:
+                - cephfs
+              service: mds
+          - config:
+              args:
+                - "ceph osd pool create rbd"
+              command: shell
+          - config:
+              args:
+                - "rbd pool init rbd"
+              command: shell
+      desc: bootstrap and deploy services.
+      destroy-cluster: false
+      polarion-id: CEPH-83573713
+      module: test_cephadm.py
+      name: Deploy cluster using cephadm
+
+  - test:
+      abort-on-fail: true
+      config:
+        command: add
+        id: client.1
+        node: node4
+        install_packages:
+          - ceph-common
+          - ceph-fuse
+        copy_admin_keyring: true
+      desc: Configure NFS client
+      destroy-cluster: false
+      module: test_client.py
+      name: configure client
+
+  - test:
+      name: NFS log_to_file
+      module: test_nfs_log_to_file.py
+      desc: >-
+        IBMCEPH-13289. Global and client.nfs log_to_file create a host
+        ganesha.log, the file grows after NFS IO, and cephadm does not
+        redeploy the daemon in a loop.
+      abort-on-fail: true
+      config:
+        cases: all
+        nfs_name: nfs-logf
+        nfs_name_pair: nfs-logf2
+        nfs_version: "4.2"
+        port: "2049"
+        fs_name: cephfs
+        export: /export_lf
+        mount_point: /mnt/nfs_log_to_file
+        service_wait_timeout: 600
+        auto_redeploy_wait: 90
+        stability_seconds: 300
+        followup_stability_seconds: 120
+        poll_interval: 30
