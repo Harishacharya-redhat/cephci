@@ -60,6 +60,8 @@ def test_process_ocpvirt_custom_config_defaults():
         "ocpvirt_profile": DEFAULT_OCPVIRT_PROFILE,
         "ocpvirt_cpu": None,
         "ocpvirt_memory": None,
+        "ocpvirt_networks": None,
+        "ocpvirt_root_disk_size": None,
     }
     assert DEFAULT_OCPVIRT_PROFILE == "o1.large"
 
@@ -71,6 +73,7 @@ def test_process_ocpvirt_custom_config_overrides():
             "vm_batch_size=2",
             "ocpvirt_namespace=rdu3_ceph_jenkins",
             "ocpvirt_profile=cx1.2xlarge",
+            "ocpvirt_networks=ceph-public,bridge-504",
             "ibm-build=True",
         ]
     )
@@ -80,6 +83,8 @@ def test_process_ocpvirt_custom_config_overrides():
         "ocpvirt_profile": "cx1.2xlarge",
         "ocpvirt_cpu": None,
         "ocpvirt_memory": None,
+        "ocpvirt_networks": ["ceph-public", "bridge-504"],
+        "ocpvirt_root_disk_size": None,
     }
 
 
@@ -93,6 +98,8 @@ def test_process_ocpvirt_custom_config_custom_resources():
         "ocpvirt_profile": None,
         "ocpvirt_cpu": 4,
         "ocpvirt_memory": "16Gi",
+        "ocpvirt_networks": None,
+        "ocpvirt_root_disk_size": None,
     }
 
 
@@ -198,6 +205,27 @@ def test_build_virtualmachine_cr_with_custom_resources():
     domain = vm["spec"]["template"]["spec"]["domain"]
     assert domain["cpu"] == {"cores": 4}
     assert domain["memory"] == {"guest": "16Gi"}
+
+
+def test_build_virtualmachine_cr_multi_network():
+    vm = build_virtualmachine_cr(
+        node_name="ceph-test-node",
+        namespace="test-ns",
+        image_name="https://example.com/disk.qcow2",
+        storage_class="nfs",
+        network="ceph-public",
+        networks=["ceph-public", "bridge-504"],
+        root_disk_size="80Gi",
+        instancetype_name="o1.large",
+        precreated_volume_names=[],
+    )
+    spec = vm["spec"]["template"]["spec"]
+    assert spec["networks"] == [
+        {"name": "default", "multus": {"networkName": "ceph-public"}},
+        {"name": "net1", "multus": {"networkName": "bridge-504"}},
+    ]
+    ifaces = spec["domain"]["devices"]["interfaces"]
+    assert [i["name"] for i in ifaces] == ["default", "net1"]
 
 
 def test_build_virtualmachine_cr_requires_sizing():
